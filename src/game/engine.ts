@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { SoundEngine } from './audio';
-import { FIGHTERS, STAGES } from './data';
+import { FIGHTERS, STAGES, TEAM_META } from './data';
 import { buildFighterRig, buildStageVisuals, disposeObject3D, type FighterRig, type StageVisuals } from './models';
 import { createProceduralTextures, type ProceduralTextureSet } from './textures';
 import type {
@@ -11,9 +11,12 @@ import type {
   FighterProfile,
   HudSnapshot,
   MatchBanner,
+  MatchConfig,
+  MatchRuleMode,
   MatchStats,
   StageId,
   StageProfile,
+  TeamId,
 } from './types';
 
 export type EngineViewMode = 'title' | 'select' | 'combat';
@@ -43,8 +46,12 @@ interface ActivePlatformState {
 }
 
 interface FighterRuntime {
+  slotIndex: number;
   isPlayer: boolean;
   profileId: FighterId;
+  team: TeamId;
+  label: string;
+  eliminated: boolean;
   rig: FighterRig;
   x: number;
   y: number;
@@ -66,7 +73,7 @@ interface FighterRuntime {
   action: FighterActionState;
   actionTimer: number;
   actionDuration: number;
-  attackHitConfirmed: boolean;
+  hitTargetSlots: Set<number>;
   attackDir: 'side' | 'up' | 'down' | 'neutral';
   hitstunTimer: number;
   hitFlashTimer: number;
@@ -76,6 +83,7 @@ interface FighterRuntime {
   lastHitTimestamp: number;
   respawnTimer: number;
   // AI internal state
+  aiInput: InputState;
   aiDecisionTimer: number;
   aiDesiredMove: -1 | 0 | 1;
   aiWantsShield: boolean;
@@ -83,6 +91,8 @@ interface FighterRuntime {
 
 interface Projectile {
   active: boolean;
+  ownerSlotIndex: number;
+  ownerTeam: TeamId;
   ownerIsPlayer: boolean;
   fighterId: FighterId;
   behavior: 'solar_bomb' | 'wind_homing' | 'shockwave';
@@ -146,13 +156,14 @@ export class SmashGameEngine {
   private currentStage: StageProfile = STAGES.sky_temple;
   private platformStates: ActivePlatformState[] = [];
 
-  private fighters: [FighterRuntime | null, FighterRuntime | null] = [null, null];
+  private fighters: FighterRuntime[] = [];
   private projectiles: Projectile[] = [];
   private particles: Particle[] = [];
 
   private viewMode: EngineViewMode = 'title';
   private paused = false;
   private matchEnded = false;
+  private ruleMode: MatchRuleMode = 'ffa';
   private aiLevel = 1;
 
   private elapsedTotal = 0;
@@ -173,31 +184,7 @@ export class SmashGameEngine {
     damageDealt: 0,
   };
 
-  private playerInput: InputState = {
-    left: false,
-    right: false,
-    up: false,
-    down: false,
-    shield: false,
-    jumpBuffer: 0,
-    lightBuffer: 0,
-    smashBuffer: 0,
-    specialBuffer: 0,
-    upSpecialBuffer: 0,
-  };
-
-  private aiInput: InputState = {
-    left: false,
-    right: false,
-    up: false,
-    down: false,
-    shield: false,
-    jumpBuffer: 0,
-    lightBuffer: 0,
-    smashBuffer: 0,
-    specialBuffer: 0,
-    upSpecialBuffer: 0,
-  };
+  private playerInput: InputState = this.createEmptyInput();
 
   private selectStageId: StageId = 'sky_temple';
   private selectPlayerId: FighterId = 'kael';
@@ -376,14 +363,27 @@ export class SmashGameEngine {
     this.projectiles = [];
   }
 
+  private createEmptyInput(): InputState {
+    return {
+      left: false,
+      right: false,
+      up: false,
+      down: false,
+      shield: false,
+      jumpBuffer: 0,
+      lightBuffer: 0,
+      smashBuffer: 0,
+      specialBuffer: 0,
+      upSpecialBuffer: 0,
+    };
+  }
+
   private clearFighters(): void {
-    this.fighters.forEach((f, idx) => {
-      if (f) {
-        this.scene.remove(f.rig.root);
-        disposeObject3D(f.rig.root);
-        this.fighters[idx] = null;
-      }
-    });
+    for (const f of this.fighters) {
+      this.scene.remove(f.rig.root);
+      disposeObject3D(f.rig.root);
+    }
+    this.fighters = [];
   }
 
   private clearShowcase(): void {
@@ -432,24 +432,33 @@ export class SmashGameEngine {
   }
 
   private createFighterRuntime(
+    slotIndex: number,
     profileId: FighterId,
     isPlayer: boolean,
+    team: TeamId,
+    label: string,
     spawnX: number,
     spawnY: number,
+    showOverheadMarker: boolean,
   ): FighterRuntime {
-    const rig = buildFighterRig(profileId, isPlayer, this.textures);
+    const accentHex = TEAM_META[team].hex;
+    const rig = buildFighterRig(profileId, accentHex, showOverheadMarker, this.textures);
     rig.root.position.set(spawnX, spawnY, 0);
     this.scene.add(rig.root);
 
     return {
+      slotIndex,
       isPlayer,
       profileId,
+      team,
+      label,
+      eliminated: false,
       rig,
       x: spawnX,
       y: spawnY,
       vx: 0,
       vy: 0,
-      facing: isPlayer ? 1 : -1,
+      facing: spawnX <= 0 ? 1 : -1,
       grounded: false,
       groundedPlatformId: null,
       coyoteTimer: 0,
@@ -465,16 +474,17 @@ export class SmashGameEngine {
       action: 'fall',
       actionTimer: 0,
       actionDuration: 0,
-      attackHitConfirmed: false,
+      hitTargetSlots: new Set<number>(),
       attackDir: 'neutral',
       hitstunTimer: 0,
       hitFlashTimer: 0,
       squashX: 1,
       squashY: 1,
-      animTime: 0,
+      animTime: slotIndex * 0.35,
       lastHitTimestamp: 0,
       respawnTimer: 0,
-      aiDecisionTimer: 0.15,
+      aiInput: this.createEmptyInput(),
+      aiDecisionTimer: 0.08 + slotIndex * 0.04,
       aiDesiredMove: 0,
       aiWantsShield: false,
     };
@@ -486,21 +496,20 @@ export class SmashGameEngine {
     this.viewMode = 'title';
     this.paused = false;
     this.matchEnded = false;
+    this.ruleMode = 'ffa';
     this.clearProjectiles();
     this.clearShowcase();
     this.clearFighters();
     this.loadStage('sky_temple');
 
     // Place two heroic fighters idling on the Sky Temple for a living title backdrop
-    this.fighters[0] = this.createFighterRuntime('kael', true, -3.2, 0);
-    this.fighters[1] = this.createFighterRuntime('vespera', false, 3.2, 0);
-    if (this.fighters[0]) {
-      this.fighters[0].grounded = true;
-      this.fighters[0].action = 'idle';
-    }
-    if (this.fighters[1]) {
-      this.fighters[1].grounded = true;
-      this.fighters[1].action = 'idle';
+    this.fighters = [
+      this.createFighterRuntime(0, 'kael', true, 'blue', 'J1', -3.2, 0, false),
+      this.createFighterRuntime(1, 'vespera', false, 'red', 'Bot 1', 3.2, 0, false),
+    ];
+    for (const f of this.fighters) {
+      f.grounded = true;
+      f.action = 'idle';
     }
   }
 
@@ -553,7 +562,7 @@ export class SmashGameEngine {
         this.scene.remove(this.selectShowcaseRig.root);
         disposeObject3D(this.selectShowcaseRig.root);
       }
-      this.selectShowcaseRig = buildFighterRig(playerId, true, this.textures);
+      this.selectShowcaseRig = buildFighterRig(playerId, 0x38bdf8, false, this.textures);
       this.selectShowcaseRig.root.position.set(2.4, 0.45, 1.5);
       this.selectShowcaseRig.root.scale.setScalar(1.22);
       this.selectShowcaseRig.playerRing.visible = false;
@@ -562,25 +571,20 @@ export class SmashGameEngine {
     }
   }
 
-  public startMatch(
-    playerId: FighterId,
-    opponentId: FighterId,
-    stageId: StageId,
-    aiLevel: number,
-    roundLabel?: string,
-  ): void {
+  public startMatch(config: MatchConfig): void {
     this.sound.unlock();
     this.viewMode = 'combat';
     this.paused = false;
     this.matchEnded = false;
-    this.aiLevel = aiLevel;
+    this.ruleMode = config.ruleMode;
+    this.aiLevel = config.aiLevel;
     this.matchElapsed = 0;
     this.hitstopTimer = 0;
     this.cameraTrauma = 0;
     this.countdownTimer = 1.65;
     this.banner = {
       text: '¡LISTOS!',
-      subtext: roundLabel,
+      subtext: config.roundLabel,
       tone: 'neutral',
     };
     this.bannerTimer = 1.25;
@@ -597,14 +601,25 @@ export class SmashGameEngine {
     this.clearShowcase();
     this.clearProjectiles();
     this.clearFighters();
-    this.loadStage(stageId);
+    this.loadStage(config.stageId);
 
-    const [pSpawn, aiSpawn] = this.currentStage.spawnPoints;
-    this.fighters[0] = this.createFighterRuntime(playerId, true, pSpawn.x, pSpawn.y);
-    this.fighters[1] = this.createFighterRuntime(opponentId, false, aiSpawn.x, aiSpawn.y);
+    const spawns = this.currentStage.spawnPoints;
+    const showMarker = config.slots.length > 2;
+    this.fighters = config.slots.map((slot, idx) => {
+      const sp = spawns[idx % spawns.length];
+      return this.createFighterRuntime(
+        slot.slotIndex,
+        slot.fighterId,
+        slot.isPlayer,
+        slot.team,
+        slot.label,
+        sp.x,
+        sp.y,
+        slot.isPlayer || showMarker,
+      );
+    });
 
     this.resetInput(this.playerInput);
-    this.resetInput(this.aiInput);
     this.sound.playCountdown(false);
     this.emitHudSnapshot();
   }
@@ -924,20 +939,35 @@ export class SmashGameEngine {
     }
   }
 
+  private isEnemy(a: FighterRuntime, b: FighterRuntime): boolean {
+    if (a.slotIndex === b.slotIndex) return false;
+    return this.ruleMode === 'ffa' || a.team !== b.team;
+  }
+
   private stepSimulation(dt: number): void {
     this.updateMovingPlatforms(dt);
 
-    const p1 = this.fighters[0];
-    const p2 = this.fighters[1];
-    if (!p1 || !p2) return;
+    if (this.fighters.length === 0) return;
 
     if (!this.matchEnded) {
-      this.updateAiController(p2, p1, dt);
-      this.stepFighter(p1, p2, this.playerInput, dt);
-      this.stepFighter(p2, p1, this.aiInput, dt);
-      this.stepProjectiles(p1, p2, dt);
-      this.checkBlastZones(p1, p2);
-      this.checkBlastZones(p2, p1);
+      for (const f of this.fighters) {
+        if (f.eliminated) continue;
+        if (!f.isPlayer) {
+          this.updateAiController(f, dt);
+        }
+      }
+
+      for (const f of this.fighters) {
+        if (f.eliminated) continue;
+        this.stepFighter(f, f.isPlayer ? this.playerInput : f.aiInput, dt);
+      }
+
+      this.stepProjectiles(dt);
+
+      for (const f of this.fighters) {
+        if (f.eliminated) continue;
+        this.checkBlastZones(f);
+      }
     }
   }
 
@@ -951,7 +981,6 @@ export class SmashGameEngine {
 
   private stepFighter(
     f: FighterRuntime,
-    opp: FighterRuntime,
     inp: InputState,
     dt: number,
   ): void {
@@ -1051,15 +1080,15 @@ export class SmashGameEngine {
           f.action = 'smash';
           f.actionDuration = 0.28;
           f.actionTimer = 0.28;
-          f.attackHitConfirmed = false;
+          f.hitTargetSlots.clear();
           this.sound.playSwing(true);
           f.vx = f.facing * 4.5;
         }
       } else {
-        // Active strike window check
+        // Active strike window check against all valid enemies
         const elapsedInMove = f.actionDuration - f.actionTimer;
-        if (!f.attackHitConfirmed && elapsedInMove >= 0.05 && elapsedInMove <= f.actionDuration * 0.65) {
-          this.evaluateMeleeHit(f, opp);
+        if (elapsedInMove >= 0.05 && elapsedInMove <= f.actionDuration * 0.65) {
+          this.evaluateMeleeHit(f);
         }
 
         if (f.action === 'up_special') {
@@ -1206,7 +1235,7 @@ export class SmashGameEngine {
       f.action = 'light';
       f.actionDuration = 0.2;
       f.actionTimer = 0.2;
-      f.attackHitConfirmed = false;
+      f.hitTargetSlots.clear();
       f.attackDir = inp.up ? 'up' : inp.down ? 'down' : 'side';
       this.sound.playSwing(false);
       this.applyGravityAndPlatforms(f, profile, dt);
@@ -1234,6 +1263,8 @@ export class SmashGameEngine {
   }
 
   private spawnProjectile(
+    ownerSlotIndex: number,
+    ownerTeam: TeamId,
     ownerIsPlayer: boolean,
     fighterId: FighterId,
     behavior: Projectile['behavior'],
@@ -1252,6 +1283,8 @@ export class SmashGameEngine {
     this.scene.add(mesh);
     this.projectiles.push({
       active: true,
+      ownerSlotIndex,
+      ownerTeam,
       ownerIsPlayer,
       fighterId,
       behavior,
@@ -1272,7 +1305,7 @@ export class SmashGameEngine {
     f.action = 'special';
     f.actionDuration = f.profileId === 'vespera' ? 0.28 : 0.34;
     f.actionTimer = f.actionDuration;
-    f.attackHitConfirmed = false;
+    f.hitTargetSlots.clear();
     f.attackDir = 'neutral';
     this.sound.playSpecial(f.profileId);
 
@@ -1288,6 +1321,8 @@ export class SmashGameEngine {
         }),
       );
       this.spawnProjectile(
+        f.slotIndex,
+        f.team,
         f.isPlayer,
         'kael',
         'solar_bomb',
@@ -1315,6 +1350,8 @@ export class SmashGameEngine {
         }),
       );
       this.spawnProjectile(
+        f.slotIndex,
+        f.team,
         f.isPlayer,
         'lyra',
         'wind_homing',
@@ -1353,6 +1390,8 @@ export class SmashGameEngine {
           }),
         );
         this.spawnProjectile(
+          f.slotIndex,
+          f.team,
           f.isPlayer,
           'titan',
           'shockwave',
@@ -1375,7 +1414,7 @@ export class SmashGameEngine {
     f.action = 'up_special';
     f.actionDuration = 0.38;
     f.actionTimer = 0.38;
-    f.attackHitConfirmed = false;
+    f.hitTargetSlots.clear();
     f.attackDir = 'up';
     f.grounded = false;
     f.groundedPlatformId = null;
@@ -1480,11 +1519,7 @@ export class SmashGameEngine {
     }
   }
 
-  private evaluateMeleeHit(attacker: FighterRuntime, defender: FighterRuntime): void {
-    if (defender.invulnTimer > 0 || defender.action === 'respawn' || defender.action === 'ko') {
-      return;
-    }
-
+  private evaluateMeleeHit(attacker: FighterRuntime): void {
     const atkProfile = FIGHTERS[attacker.profileId];
     const isSmash = attacker.action === 'smash';
     const isSpecial = attacker.action === 'special' || attacker.action === 'up_special';
@@ -1506,10 +1541,6 @@ export class SmashGameEngine {
       hy = attacker.y + 0.55;
     }
 
-    const defCenterX = defender.x;
-    const defCenterY = defender.y + 1.0;
-    const dx = defCenterX - hx;
-    const dy = defCenterY - hy;
     const hitRadius =
       attacker.profileId === 'titan' && isSpecial
         ? 1.55
@@ -1519,27 +1550,42 @@ export class SmashGameEngine {
             ? 1.35
             : 1.15;
 
-    if (dx * dx + dy * dy <= hitRadius * hitRadius) {
-      attacker.attackHitConfirmed = true;
-      const baseDmg = isSmash
-        ? atkProfile.smashDamage
-        : isSpecial
-          ? Math.round(atkProfile.smashDamage * 0.72)
-          : atkProfile.lightDamage;
-      const baseKb = isSmash
-        ? atkProfile.smashKnockback
-        : isSpecial
-          ? atkProfile.smashKnockback * 0.85
-          : atkProfile.lightKnockback;
+    const baseDmg = isSmash
+      ? atkProfile.smashDamage
+      : isSpecial
+        ? Math.round(atkProfile.smashDamage * 0.72)
+        : atkProfile.lightDamage;
+    const baseKb = isSmash
+      ? atkProfile.smashKnockback
+      : isSpecial
+        ? atkProfile.smashKnockback * 0.85
+        : atkProfile.lightKnockback;
 
-      this.applyHit(
-        attacker,
-        defender,
-        baseDmg,
-        baseKb,
-        attacker.attackDir,
-        isSmash || isSpecial,
-      );
+    for (const defender of this.fighters) {
+      if (
+        defender.eliminated ||
+        !this.isEnemy(attacker, defender) ||
+        attacker.hitTargetSlots.has(defender.slotIndex) ||
+        defender.invulnTimer > 0 ||
+        defender.action === 'respawn' ||
+        defender.action === 'ko'
+      ) {
+        continue;
+      }
+
+      const dx = defender.x - hx;
+      const dy = defender.y + 1.0 - hy;
+      if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+        attacker.hitTargetSlots.add(defender.slotIndex);
+        this.applyHit(
+          attacker,
+          defender,
+          baseDmg,
+          baseKb,
+          attacker.attackDir,
+          isSmash || isSpecial,
+        );
+      }
     }
   }
 
@@ -1550,13 +1596,16 @@ export class SmashGameEngine {
     baseKnockback: number,
     dir: 'side' | 'up' | 'down' | 'neutral',
     isHeavy: boolean,
+    overrideSourceX?: number,
+    overrideSourceFacing?: 1 | -1,
   ): void {
     // Shield check
     if (defender.action === 'shield') {
       defender.shield = Math.max(0, defender.shield - damage * 1.9);
       this.sound.playShieldClang();
       this.spawnParticles(defender.x, defender.y + 1.1, 0, 0x38bdf8, 8, 6, 0.5);
-      const pushDir = attacker ? attacker.facing : defender.x >= 0 ? 1 : -1;
+      const pushDir =
+        overrideSourceFacing ?? (attacker ? attacker.facing : defender.x >= 0 ? 1 : -1);
       defender.vx += pushDir * 4.5;
       if (defender.shield <= 1) {
         defender.action = 'dizzy';
@@ -1594,13 +1643,15 @@ export class SmashGameEngine {
 
     // Smash knockback formula scaled by % and weight
     const kb = (baseKnockback + defender.damage * 0.165) * (100 / defProfile.weight);
-    const launchDirX = attacker
-      ? defender.x >= attacker.x
-        ? 1
-        : -1
-      : defender.vx >= 0
-        ? 1
-        : -1;
+    const originX = overrideSourceX ?? attacker?.x;
+    const launchDirX =
+      originX !== undefined
+        ? defender.x >= originX
+          ? 1
+          : -1
+        : defender.vx >= 0
+          ? 1
+          : -1;
 
     let angleDeg = 36;
     if (dir === 'up') angleDeg = 76;
@@ -1638,18 +1689,39 @@ export class SmashGameEngine {
     );
   }
 
-  private stepProjectiles(p1: FighterRuntime, p2: FighterRuntime, dt: number): void {
+  private isValidProjectileTarget(proj: Projectile, target: FighterRuntime): boolean {
+    if (target.eliminated || target.action === 'ko') return false;
+    if (this.ruleMode === 'ffa') {
+      return target.slotIndex !== proj.ownerSlotIndex;
+    }
+    return target.team !== proj.ownerTeam;
+  }
+
+  private stepProjectiles(dt: number): void {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const proj = this.projectiles[i];
-      const target = proj.ownerIsPlayer ? p2 : p1;
-      const attacker = proj.ownerIsPlayer ? p1 : p2;
+      const owner = this.fighters.find((f) => f.slotIndex === proj.ownerSlotIndex) ?? null;
 
       proj.life -= dt;
 
-      // Fighter-specific projectile flight behavior
+      // Fighter-specific projectile flight behavior: track closest valid enemy vertically
       if (proj.behavior === 'wind_homing') {
-        const desiredVy = THREE.MathUtils.clamp((target.y + 1.0 - proj.y) * 3.2, -5.5, 5.5);
-        proj.vy = THREE.MathUtils.lerp(proj.vy, desiredVy, 1 - Math.exp(-4.5 * dt));
+        let closestEnemy: FighterRuntime | null = null;
+        let closestDistSq = Infinity;
+        for (const candidate of this.fighters) {
+          if (!this.isValidProjectileTarget(proj, candidate) || candidate.action === 'respawn') {
+            continue;
+          }
+          const dSq = (candidate.x - proj.x) ** 2 + (candidate.y + 1.0 - proj.y) ** 2;
+          if (dSq < closestDistSq) {
+            closestDistSq = dSq;
+            closestEnemy = candidate;
+          }
+        }
+        if (closestEnemy) {
+          const desiredVy = THREE.MathUtils.clamp((closestEnemy.y + 1.0 - proj.y) * 3.2, -5.5, 5.5);
+          proj.vy = THREE.MathUtils.lerp(proj.vy, desiredVy, 1 - Math.exp(-4.5 * dt));
+        }
       }
 
       proj.x += proj.vx * dt;
@@ -1663,48 +1735,63 @@ export class SmashGameEngine {
         proj.mesh.rotation.y += dt * 6;
       }
 
-      let hitDirect = false;
-      if (
-        target.invulnTimer <= 0 &&
-        target.action !== 'respawn' &&
-        target.action !== 'dodge'
-      ) {
+      let hitTargetSlot = -1;
+      const projFacing: 1 | -1 = proj.vx >= 0 ? 1 : -1;
+      for (const target of this.fighters) {
+        if (
+          !this.isValidProjectileTarget(proj, target) ||
+          target.invulnTimer > 0 ||
+          target.action === 'respawn' ||
+          target.action === 'dodge'
+        ) {
+          continue;
+        }
         const dx = target.x - proj.x;
         const dy = target.y + 1.0 - proj.y;
         if (dx * dx + dy * dy <= (proj.radius + 0.7) ** 2) {
-          hitDirect = true;
+          hitTargetSlot = target.slotIndex;
           this.applyHit(
-            {
-              ...attacker,
-              facing: proj.vx >= 0 ? 1 : -1,
-              x: proj.x,
-            } as FighterRuntime,
+            owner,
             target,
             proj.damage,
             proj.knockback,
             proj.launchDir,
             proj.behavior === 'solar_bomb' || proj.behavior === 'shockwave',
+            proj.x,
+            projFacing,
           );
+          break;
         }
       }
 
       const expired = proj.life <= 0;
-      if (hitDirect || expired) {
+      if (hitTargetSlot !== -1 || expired) {
         // Kael's Solar Bomb explodes in an AoE fireball when impacting or expiring!
         if (proj.behavior === 'solar_bomb') {
           this.spawnParticles(proj.x, proj.y, 0.2, 0xf97316, 20, 10.5, 0.9);
           this.cameraTrauma = Math.min(1, this.cameraTrauma + 0.2);
-          if (!hitDirect && target.invulnTimer <= 0 && target.action !== 'respawn' && target.action !== 'dodge') {
+          for (const target of this.fighters) {
+            if (
+              target.slotIndex === hitTargetSlot ||
+              !this.isValidProjectileTarget(proj, target) ||
+              target.invulnTimer > 0 ||
+              target.action === 'respawn' ||
+              target.action === 'dodge'
+            ) {
+              continue;
+            }
             const bx = target.x - proj.x;
             const by = target.y + 1.0 - proj.y;
             if (bx * bx + by * by <= 2.35 * 2.35) {
               this.applyHit(
-                { ...attacker, facing: proj.vx >= 0 ? 1 : -1, x: proj.x } as FighterRuntime,
+                owner,
                 target,
                 proj.damage,
                 proj.knockback,
                 'up',
                 true,
+                proj.x,
+                projFacing,
               );
             }
           }
@@ -1717,8 +1804,26 @@ export class SmashGameEngine {
     }
   }
 
-  private checkBlastZones(f: FighterRuntime, opp: FighterRuntime): void {
-    if (f.action === 'respawn' || this.matchEnded) return;
+  private finishMatch(playerWon: boolean, subtext: string): void {
+    this.matchEnded = true;
+    this.banner = {
+      text: playerWon ? '¡VICTORIA!' : '¡DERROTA!',
+      subtext,
+      tone: playerWon ? 'victory' : 'defeat',
+    };
+    this.bannerTimer = 3.0;
+    if (playerWon) this.sound.playVictory();
+    else this.sound.playDefeat();
+    this.emitHudSnapshot();
+    window.setTimeout(() => {
+      if (!this.disposed) {
+        this.callbacks.onMatchEnd(playerWon, { ...this.stats });
+      }
+    }, 950);
+  }
+
+  private checkBlastZones(f: FighterRuntime): void {
+    if (f.action === 'respawn' || f.eliminated || this.matchEnded) return;
     const bz = this.currentStage.blastZones;
     const out =
       f.x < bz.left || f.x > bz.right || f.y < bz.bottom || f.y > bz.top;
@@ -1730,49 +1835,82 @@ export class SmashGameEngine {
     this.cameraTrauma = 0.85;
     const burstX = THREE.MathUtils.clamp(f.x, bz.left + 2, bz.right - 2);
     const burstY = THREE.MathUtils.clamp(f.y, bz.bottom + 2, bz.top - 2);
-    this.spawnParticles(burstX, burstY, 0, f.isPlayer ? 0x38bdf8 : 0xf43f5e, 28, 15, 1.25);
+    this.spawnParticles(burstX, burstY, 0, TEAM_META[f.team].hex, 28, 15, 1.25);
+
+    const player = this.fighters.find((x) => x.isPlayer);
+    const playerTeam: TeamId = player?.team ?? 'blue';
 
     f.stocks = Math.max(0, f.stocks - 1);
     if (f.isPlayer) {
       this.stats.aiKOs += 1;
-    } else {
+    } else if (this.ruleMode === 'ffa' || f.team !== playerTeam) {
       this.stats.playerKOs += 1;
     }
 
     if (f.stocks <= 0) {
-      this.matchEnded = true;
+      f.eliminated = true;
       f.action = 'ko';
       f.rig.root.visible = false;
-      const playerWon = !f.isPlayer;
-      this.banner = {
-        text: playerWon ? '¡VICTORIA!' : '¡DERROTA!',
-        subtext: playerWon ? 'Rival fuera de combate' : 'Te has quedado sin vidas',
-        tone: playerWon ? 'victory' : 'defeat',
-      };
-      this.bannerTimer = 3.0;
-      if (playerWon) this.sound.playVictory();
-      else this.sound.playDefeat();
-      this.emitHudSnapshot();
-      window.setTimeout(() => {
-        if (!this.disposed) {
-          this.callbacks.onMatchEnd(playerWon, { ...this.stats });
+
+      const living = this.fighters.filter((x) => !x.eliminated);
+
+      if (this.ruleMode === 'ffa') {
+        if (f.isPlayer) {
+          this.finishMatch(false, 'Te has quedado sin vidas');
+          return;
         }
-      }, 950);
+        if (living.length <= 1) {
+          this.finishMatch(true, '¡Último luchador en pie!');
+          return;
+        }
+        this.banner = {
+          text: '¡ELIMINADO!',
+          subtext: `${f.label} · ${FIGHTERS[f.profileId].name} fuera de combate`,
+          tone: 'ko',
+        };
+        this.bannerTimer = 1.6;
+        return;
+      }
+
+      // Teams mode win/loss evaluation
+      const livingAllies = living.filter((x) => x.team === playerTeam);
+      const livingEnemies = living.filter((x) => x.team !== playerTeam);
+
+      if (livingEnemies.length === 0) {
+        this.finishMatch(true, '¡Equipo rival derrotado!');
+        return;
+      }
+      if (livingAllies.length === 0) {
+        this.finishMatch(false, 'Tu equipo se ha quedado sin vidas');
+        return;
+      }
+
+      this.banner = {
+        text: f.isPlayer ? '¡SIN VIDAS!' : '¡ELIMINADO!',
+        subtext: f.isPlayer
+          ? 'Tu aliado sigue combatiendo'
+          : `${f.label} · ${FIGHTERS[f.profileId].name} fuera de combate`,
+        tone: 'ko',
+      };
+      this.bannerTimer = 1.75;
       return;
     }
 
     // Respawn on sky drop-in
     this.banner = {
       text: '¡K.O.!',
-      subtext: f.isPlayer ? 'Jugador 1 pierde 1 vida' : '¡Rival expulsado!',
+      subtext: f.isPlayer
+        ? 'Jugador 1 pierde 1 vida'
+        : `${f.label} (${FIGHTERS[f.profileId].name}) pierde 1 vida`,
       tone: 'ko',
     };
     this.bannerTimer = 1.3;
 
+    const respawnOffsets = [-2.4, 2.4, -4.0, 4.0, 0];
     f.damage = 0;
     f.vx = 0;
     f.vy = 0;
-    f.x = opp.x > 0 ? -2.2 : 2.2;
+    f.x = respawnOffsets[f.slotIndex % respawnOffsets.length];
     f.y = 8.5;
     f.jumpsLeft = f.profileId === 'vespera' ? 2 : 1;
     f.upSpecialUsed = false;
@@ -1785,16 +1923,39 @@ export class SmashGameEngine {
 
   // ==================== PROGRESSIVE AI CONTROLLER ====================
 
-  private updateAiController(ai: FighterRuntime, player: FighterRuntime, dt: number): void {
-    this.decrementBuffers(this.aiInput, dt);
+  private findClosestEnemy(ai: FighterRuntime): FighterRuntime | null {
+    let best: FighterRuntime | null = null;
+    let bestDistSq = Infinity;
+    for (const candidate of this.fighters) {
+      if (
+        candidate.eliminated ||
+        candidate.action === 'ko' ||
+        !this.isEnemy(ai, candidate)
+      ) {
+        continue;
+      }
+      const dx = candidate.x - ai.x;
+      const dy = candidate.y - ai.y;
+      const dSq = dx * dx + dy * dy;
+      if (dSq < bestDistSq) {
+        bestDistSq = dSq;
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
+  private updateAiController(ai: FighterRuntime, dt: number): void {
+    const inp = ai.aiInput;
+    this.decrementBuffers(inp, dt);
     const level = this.aiLevel; // 1 to 5
     const reactionCadence = Math.max(0.055, 0.24 - level * 0.038);
 
     ai.aiDecisionTimer -= dt;
     if (ai.aiDecisionTimer > 0) {
-      this.aiInput.left = ai.aiDesiredMove === -1;
-      this.aiInput.right = ai.aiDesiredMove === 1;
-      this.aiInput.shield = ai.aiWantsShield;
+      inp.left = ai.aiDesiredMove === -1;
+      inp.right = ai.aiDesiredMove === 1;
+      inp.shield = ai.aiWantsShield;
       return;
     }
     ai.aiDecisionTimer = reactionCadence * (0.85 + Math.random() * 0.3);
@@ -1807,47 +1968,73 @@ export class SmashGameEngine {
     if (offStage && !ai.grounded) {
       ai.aiWantsShield = false;
       ai.aiDesiredMove = ai.x < 0 ? 1 : -1;
-      this.aiInput.left = ai.aiDesiredMove === -1;
-      this.aiInput.right = ai.aiDesiredMove === 1;
-      this.aiInput.up = true;
+      inp.left = ai.aiDesiredMove === -1;
+      inp.right = ai.aiDesiredMove === 1;
+      inp.up = true;
 
       if (ai.y < 1.2 && ai.vy < 1.5) {
         if (ai.jumpsLeft > 0) {
-          this.aiInput.jumpBuffer = 0.1;
+          inp.jumpBuffer = 0.1;
         } else if (!ai.upSpecialUsed && level >= 2) {
-          this.aiInput.upSpecialBuffer = 0.12;
+          inp.upSpecialBuffer = 0.12;
         }
       }
       return;
     }
 
-    this.aiInput.up = false;
-    this.aiInput.down = false;
+    inp.up = false;
+    inp.down = false;
 
-    const dx = player.x - ai.x;
-    const dy = player.y - ai.y;
+    const target = this.findClosestEnemy(ai);
+    if (!target) {
+      ai.aiWantsShield = false;
+      ai.aiDesiredMove = Math.abs(ai.x) > 2.5 ? (ai.x > 0 ? -1 : 1) : 0;
+      inp.left = ai.aiDesiredMove === -1;
+      inp.right = ai.aiDesiredMove === 1;
+      inp.shield = false;
+      return;
+    }
+
+    const dx = target.x - ai.x;
+    const dy = target.y - ai.y;
     const dist = Math.hypot(dx, dy);
 
-    // 2. Reactive Shielding against player smashes on higher levels
-    const playerAttacking =
-      player.action === 'smash_charge' || player.action === 'smash' || player.action === 'light';
-    if (playerAttacking && dist < 3.1 && ai.grounded && ai.shield > 28) {
+    // 2. Reactive Shielding against nearby attacking enemies on higher levels
+    let nearbyThreatAttacking = false;
+    for (const candidate of this.fighters) {
+      if (candidate.eliminated || !this.isEnemy(ai, candidate)) continue;
+      const isAtk =
+        candidate.action === 'smash_charge' ||
+        candidate.action === 'smash' ||
+        candidate.action === 'light';
+      if (isAtk && Math.hypot(candidate.x - ai.x, candidate.y - ai.y) < 3.1) {
+        nearbyThreatAttacking = true;
+        break;
+      }
+    }
+
+    if (nearbyThreatAttacking && ai.grounded && ai.shield > 28) {
       const shieldChance = Math.min(0.75, (level - 1) * 0.18);
       if (Math.random() < shieldChance) {
         ai.aiWantsShield = true;
         ai.aiDesiredMove = 0;
-        this.aiInput.shield = true;
+        inp.shield = true;
         return;
       }
     }
     ai.aiWantsShield = false;
-    this.aiInput.shield = false;
+    inp.shield = false;
 
     // 3. Movement & Platform Navigation (avoid walking off edges)
     const desiredSpacing = 1.65;
     if (Math.abs(dx) > desiredSpacing) {
       const moveToward = dx > 0 ? 1 : -1;
-      if (ai.grounded && Math.abs(ai.x + moveToward * 1.1) > stageHalfW && Math.abs(player.x) > stageHalfW && level < 4) {
+      if (
+        ai.grounded &&
+        Math.abs(ai.x + moveToward * 1.1) > stageHalfW &&
+        Math.abs(target.x) > stageHalfW &&
+        level < 4
+      ) {
         ai.aiDesiredMove = 0; // Lower levels wait at ledge rather than edge-guarding
       } else {
         ai.aiDesiredMove = moveToward;
@@ -1859,9 +2046,9 @@ export class SmashGameEngine {
 
     // Jump to chase higher platforms or drop down to lower ones
     if (dy > 2.2 && ai.grounded && Math.random() < 0.35 + level * 0.1) {
-      this.aiInput.jumpBuffer = 0.1;
+      inp.jumpBuffer = 0.1;
     } else if (dy < -1.8 && ai.grounded && ai.groundedPlatformId !== 'main' && Math.random() < 0.45) {
-      this.aiInput.down = true;
+      inp.down = true;
     }
 
     // 4. Offensive Attacks scaled by AI level
@@ -1869,28 +2056,32 @@ export class SmashGameEngine {
     if (dist < 2.6 && Math.abs(dy) < 1.8) {
       if (Math.random() < aggro) {
         // Use Smash to finish high-% targets!
-        const smashBias = player.damage > 75 ? 0.55 : 0.25;
+        const smashBias = target.damage > 75 ? 0.55 : 0.25;
         if (Math.random() < smashBias && level >= 2) {
-          this.aiInput.smashBuffer = 0.12;
-          if (dy > 0.9) this.aiInput.up = true;
+          inp.smashBuffer = 0.12;
+          if (dy > 0.9) inp.up = true;
         } else {
-          this.aiInput.lightBuffer = 0.12;
+          inp.lightBuffer = 0.12;
         }
       }
     } else if (dist > 4.5 && dist < 11 && Math.abs(dy) < 2.2 && Math.random() < 0.14 + level * 0.06) {
       // Projectile / dash poke at mid-range
       ai.facing = dx >= 0 ? 1 : -1;
-      this.aiInput.specialBuffer = 0.12;
+      inp.specialBuffer = 0.12;
     }
 
-    this.aiInput.left = ai.aiDesiredMove === -1;
-    this.aiInput.right = ai.aiDesiredMove === 1;
+    inp.left = ai.aiDesiredMove === -1;
+    inp.right = ai.aiDesiredMove === 1;
   }
 
   // ==================== ANIMATION & CAMERA ====================
 
   private animateFighterRig(f: FighterRuntime, dt: number): void {
     const rig = f.rig;
+    if (f.eliminated) {
+      rig.root.visible = false;
+      return;
+    }
     rig.root.position.set(f.x, f.y, 0);
 
     // Facing rotation smoothly damped
@@ -1906,6 +2097,11 @@ export class SmashGameEngine {
       rig.root.visible = Math.floor(f.invulnTimer * 18) % 2 === 0;
     } else if (f.action !== 'ko') {
       rig.root.visible = true;
+    }
+
+    // Spin overhead team/player marker gently
+    if (rig.markerDiamond.visible) {
+      rig.markerDiamond.rotation.y = f.animTime * 2.4;
     }
 
     // Hit flash emissive pulse
@@ -1997,21 +2193,29 @@ export class SmashGameEngine {
   }
 
   private updateCombatCamera(dt: number): void {
-    const p1 = this.fighters[0];
-    const p2 = this.fighters[1];
-    if (!p1 || !p2) return;
+    const active = this.fighters.filter((f) => !f.eliminated && f.action !== 'ko');
+    if (active.length === 0) return;
 
     const bz = this.currentStage.blastZones;
-    const x1 = THREE.MathUtils.clamp(p1.x, bz.left + 3, bz.right - 3);
-    const y1 = THREE.MathUtils.clamp(p1.y, bz.bottom + 3, bz.top - 3);
-    const x2 = THREE.MathUtils.clamp(p2.x, bz.left + 3, bz.right - 3);
-    const y2 = THREE.MathUtils.clamp(p2.y, bz.bottom + 3, bz.top - 3);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
 
-    const midX = THREE.MathUtils.clamp((x1 + x2) * 0.5, -6.5, 6.5);
-    const midY = THREE.MathUtils.clamp((y1 + y2) * 0.5 + 1.8, 1.5, 7.5);
-    const spanX = Math.abs(x1 - x2);
-    const spanY = Math.abs(y1 - y2);
-    const desiredZ = THREE.MathUtils.clamp(14.5 + spanX * 0.65 + spanY * 0.55, 16.5, 29.5);
+    for (const f of active) {
+      const cx = THREE.MathUtils.clamp(f.x, bz.left + 3, bz.right - 3);
+      const cy = THREE.MathUtils.clamp(f.y, bz.bottom + 3, bz.top - 3);
+      if (cx < minX) minX = cx;
+      if (cx > maxX) maxX = cx;
+      if (cy < minY) minY = cy;
+      if (cy > maxY) maxY = cy;
+    }
+
+    const midX = THREE.MathUtils.clamp((minX + maxX) * 0.5, -6.8, 6.8);
+    const midY = THREE.MathUtils.clamp((minY + maxY) * 0.5 + 1.8, 1.5, 7.8);
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    const desiredZ = THREE.MathUtils.clamp(14.5 + spanX * 0.65 + spanY * 0.55, 16.5, 33.0);
 
     this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, midX * 0.72, 5.5, dt);
     this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, midY + 2.2, 5.5, dt);
@@ -2053,7 +2257,7 @@ export class SmashGameEngine {
   }
 
   private computeOffscreenIndicator(f: FighterRuntime): FighterHudState['offscreen'] {
-    if (f.action === 'ko') {
+    if (f.eliminated || f.action === 'ko') {
       return { visible: false, xPct: 50, yPct: 50, angleRad: 0 };
     }
     _projVec.set(f.x, f.y + 1.0, 0).project(this.camera);
@@ -2072,14 +2276,18 @@ export class SmashGameEngine {
 
   private buildFighterHud(f: FighterRuntime): FighterHudState {
     return {
+      slotIndex: f.slotIndex,
       id: f.profileId,
       name: FIGHTERS[f.profileId].name,
+      label: f.label,
       isPlayer: f.isPlayer,
+      team: f.team,
       damage: Math.round(f.damage),
       stocks: f.stocks,
       maxStocks: f.maxStocks,
       shield: Math.round(f.shield),
       isShielding: f.action === 'shield',
+      eliminated: f.eliminated,
       action: f.action,
       lastHitTimestamp: f.lastHitTimestamp,
       offscreen: this.computeOffscreenIndicator(f),
@@ -2087,12 +2295,10 @@ export class SmashGameEngine {
   }
 
   private emitHudSnapshot(): void {
-    const p1 = this.fighters[0];
-    const p2 = this.fighters[1];
-    if (!p1 || !p2) return;
+    if (this.fighters.length === 0) return;
 
     this.callbacks.onHudUpdate({
-      fighters: [this.buildFighterHud(p1), this.buildFighterHud(p2)],
+      fighters: this.fighters.map((f) => this.buildFighterHud(f)),
       elapsedSec: this.matchElapsed,
       banner: this.banner,
       stats: { ...this.stats },

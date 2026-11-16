@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { HelpCircle, Pause, Volume2, VolumeX } from 'lucide-react';
+import { TEAM_META } from '../game/data';
 import type { FighterHudState, HudSnapshot } from '../game/types';
 import { FighterEmblem } from './FighterEmblem';
 
@@ -25,43 +26,45 @@ function formatClock(sec: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-const FighterStatusCard: React.FC<{ fighter: FighterHudState }> = ({ fighter }) => {
-  const isP1 = fighter.isPlayer;
+const FighterStatusCard: React.FC<{ fighter: FighterHudState; compact: boolean }> = ({
+  fighter,
+  compact,
+}) => {
+  const tm = TEAM_META[fighter.team];
   const dmgColor = getDamageColor(fighter.damage);
   const popKey = fighter.lastHitTimestamp;
 
   return (
     <div
-      className={`flex items-center gap-3.5 rounded-2xl bg-[#0B1324]/88 border px-4 py-2.5 shadow-xl min-w-[215px] ${
-        isP1 ? 'border-sky-400/50' : 'border-rose-400/50'
+      className={`flex items-center gap-2.5 sm:gap-3 rounded-2xl bg-[#0B1324]/90 border shadow-xl transition-opacity ${
+        tm.borderClass
+      } ${fighter.eliminated ? 'opacity-45 grayscale' : ''} ${
+        compact ? 'px-3 py-2 min-w-[162px] sm:min-w-[182px]' : 'px-4 py-2.5 min-w-[215px]'
       }`}
     >
-      <FighterEmblem id={fighter.id} className="w-10 h-10 shrink-0" />
+      <FighterEmblem
+        id={fighter.id}
+        className={compact ? 'w-8 h-8 shrink-0' : 'w-10 h-10 shrink-0'}
+      />
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-display font-bold text-sm text-white truncate">
+        <div className="flex items-center justify-between gap-1.5">
+          <span className="font-display font-bold text-xs sm:text-sm text-white truncate">
             {fighter.name}
           </span>
-          <span
-            className={`text-[11px] font-semibold ${
-              isP1 ? 'text-sky-400' : 'text-rose-400'
-            }`}
-          >
-            {isP1 ? 'J1' : 'IA'}
+          <span className={`text-[10px] sm:text-[11px] font-semibold whitespace-nowrap ${tm.textClass}`}>
+            {fighter.label}
           </span>
         </div>
 
         {/* Stock pips */}
-        <div className="flex items-center gap-1.5 mt-1" aria-label={`Vidas: ${fighter.stocks}`}>
+        <div className="flex items-center gap-1 mt-1" aria-label={`Vidas: ${fighter.stocks}`}>
           {Array.from({ length: fighter.maxStocks }).map((_, idx) => (
             <span
               key={idx}
               className={`w-2.5 h-2.5 rounded-full border ${
                 idx < fighter.stocks
-                  ? isP1
-                    ? 'bg-sky-400 border-sky-200'
-                    : 'bg-rose-500 border-rose-200'
+                  ? tm.bgDotClass
                   : 'bg-slate-800 border-slate-600'
               }`}
             />
@@ -69,7 +72,7 @@ const FighterStatusCard: React.FC<{ fighter: FighterHudState }> = ({ fighter }) 
         </div>
 
         {/* Shield indicator bar */}
-        {fighter.isShielding && (
+        {fighter.isShielding && !fighter.eliminated && (
           <div className="mt-1.5 h-1 w-full rounded-full bg-slate-800 overflow-hidden">
             <div
               className="h-full bg-sky-400 transition-all duration-75"
@@ -79,14 +82,22 @@ const FighterStatusCard: React.FC<{ fighter: FighterHudState }> = ({ fighter }) 
         )}
       </div>
 
-      {/* Damage Percentage */}
-      <div
-        key={popKey}
-        className={`font-display font-bold text-3xl leading-none tabular-nums animate-hud-pop ${dmgColor}`}
-      >
-        {fighter.damage}
-        <span className="text-lg ml-0.5">%</span>
-      </div>
+      {/* Damage Percentage or K.O. */}
+      {fighter.eliminated ? (
+        <div className="font-display font-bold text-lg sm:text-xl leading-none text-slate-400">
+          K.O.
+        </div>
+      ) : (
+        <div
+          key={popKey}
+          className={`font-display font-bold leading-none tabular-nums animate-hud-pop ${
+            compact ? 'text-2xl' : 'text-3xl'
+          } ${dmgColor}`}
+        >
+          {fighter.damage}
+          <span className="text-sm sm:text-lg ml-0.5">%</span>
+        </div>
+      )}
     </div>
   );
 };
@@ -100,24 +111,23 @@ export const CombatHud: React.FC<CombatHudProps> = ({
   onPause,
 }) => {
   const [showControls, setShowControls] = useState(false);
-  const [p1, ai] = hud.fighters;
+  const compactCards = hud.fighters.length > 2;
 
   return (
-    <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4 sm:p-5">
+    <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 sm:p-5">
       {/* Offscreen Magnifying Indicators */}
       {hud.fighters.map((f) => {
-        if (!f.offscreen.visible) return null;
+        if (!f.offscreen.visible || f.eliminated) return null;
+        const tm = TEAM_META[f.team];
         return (
           <div
-            key={f.isPlayer ? 'off-p1' : 'off-ai'}
+            key={`off-${f.slotIndex}`}
             style={{
               left: `${f.offscreen.xPct}%`,
               top: `${f.offscreen.yPct}%`,
               transform: 'translate(-50%, -50%)',
             }}
-            className={`absolute flex items-center gap-1.5 rounded-full px-2.5 py-1 border bg-[#0B1324]/92 shadow-lg ${
-              f.isPlayer ? 'border-sky-400 text-sky-300' : 'border-rose-400 text-rose-300'
-            }`}
+            className={`absolute flex items-center gap-1.5 rounded-full px-2.5 py-1 border bg-[#0B1324]/92 shadow-lg ${tm.borderClass} ${tm.textClass}`}
           >
             <FighterEmblem id={f.id} className="w-5 h-5" />
             <span className="font-display font-bold text-xs tabular-nums">{f.damage}%</span>
@@ -201,10 +211,15 @@ export const CombatHud: React.FC<CombatHudProps> = ({
         </div>
       )}
 
-      {/* Bottom Corner Fighter Cards */}
-      <div className="flex items-end justify-between gap-4">
-        <FighterStatusCard fighter={p1} />
-        <FighterStatusCard fighter={ai} />
+      {/* Bottom Fighter Cards Row (2 to 5 fighters) */}
+      <div
+        className={`flex items-end gap-2 sm:gap-3 flex-wrap ${
+          compactCards ? 'justify-center' : 'justify-between'
+        }`}
+      >
+        {hud.fighters.map((f) => (
+          <FighterStatusCard key={f.slotIndex} fighter={f} compact={compactCards} />
+        ))}
       </div>
     </div>
   );

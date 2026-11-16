@@ -63,7 +63,7 @@ export const PauseAndResultModal: React.FC<PauseAndResultModalProps> = ({
                   ? `Ronda ${tournamentRound} de ${tournamentTotal} superada`
                   : isTournamentChamp
                     ? 'Has conquistado todas las arenas flotantes'
-                    : 'Has expulsado al rival de la arena'}
+                    : 'Has dominado la arena flotante'}
               </p>
             </>
           )}
@@ -75,7 +75,7 @@ export const PauseAndResultModal: React.FC<PauseAndResultModalProps> = ({
               </div>
               <h2 className="font-display font-bold text-3xl text-rose-400">Derrota</h2>
               <p className="text-sm text-slate-300">
-                El rival te dejó sin vidas. ¡Inténtalo de nuevo!
+                Sin vidas disponibles en tu bando. ¡Inténtalo de nuevo!
               </p>
             </>
           )}

@@ -1,11 +1,130 @@
 import type {
+  CombatantSlot,
   FighterId,
   FighterProfile,
   LocalRecords,
+  MatchPresetId,
+  MatchRuleMode,
   StageId,
   StageProfile,
+  TeamId,
   TournamentRound,
 } from './types';
+
+export const TEAM_META: Record<
+  TeamId,
+  { name: string; hex: number; borderClass: string; textClass: string; bgDotClass: string; badgeClass: string }
+> = {
+  blue: {
+    name: 'Azul',
+    hex: 0x38bdf8,
+    borderClass: 'border-sky-400/60',
+    textClass: 'text-sky-400',
+    bgDotClass: 'bg-sky-400 border-sky-200',
+    badgeClass: 'bg-sky-500/20 text-sky-300 border-sky-400/40',
+  },
+  red: {
+    name: 'Rojo',
+    hex: 0xf43f5e,
+    borderClass: 'border-rose-400/60',
+    textClass: 'text-rose-400',
+    bgDotClass: 'bg-rose-500 border-rose-200',
+    badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-400/40',
+  },
+  amber: {
+    name: 'Ámbar',
+    hex: 0xfbbf24,
+    borderClass: 'border-amber-400/60',
+    textClass: 'text-amber-300',
+    bgDotClass: 'bg-amber-400 border-amber-200',
+    badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-400/40',
+  },
+  emerald: {
+    name: 'Verde',
+    hex: 0x34d399,
+    borderClass: 'border-emerald-400/60',
+    textClass: 'text-emerald-400',
+    bgDotClass: 'bg-emerald-400 border-emerald-200',
+    badgeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40',
+  },
+  violet: {
+    name: 'Violeta',
+    hex: 0xa78bfa,
+    borderClass: 'border-violet-400/60',
+    textClass: 'text-violet-400',
+    bgDotClass: 'bg-violet-400 border-violet-200',
+    badgeClass: 'bg-violet-500/20 text-violet-300 border-violet-400/40',
+  },
+};
+
+export const FFA_SLOT_TEAMS: TeamId[] = ['blue', 'red', 'amber', 'emerald', 'violet'];
+
+export function buildPresetSlots(
+  preset: MatchPresetId,
+  playerId: FighterId,
+): { ruleMode: MatchRuleMode; slots: CombatantSlot[] } {
+  const others: FighterId[] = (['kael', 'vespera', 'titan', 'lyra'] as FighterId[]).filter(
+    (id) => id !== playerId,
+  );
+  const f1 = others[0];
+  const f2 = others[1];
+  const f3 = others[2];
+  const f4 = playerId;
+
+  if (preset === '1v1') {
+    return {
+      ruleMode: 'ffa',
+      slots: [
+        { slotIndex: 0, isPlayer: true, fighterId: playerId, team: 'blue', label: 'J1' },
+        { slotIndex: 1, isPlayer: false, fighterId: f1, team: 'red', label: 'Bot 1' },
+      ],
+    };
+  }
+  if (preset === 'ffa4') {
+    return {
+      ruleMode: 'ffa',
+      slots: [
+        { slotIndex: 0, isPlayer: true, fighterId: playerId, team: 'blue', label: 'J1' },
+        { slotIndex: 1, isPlayer: false, fighterId: f1, team: 'red', label: 'Bot 1' },
+        { slotIndex: 2, isPlayer: false, fighterId: f2, team: 'amber', label: 'Bot 2' },
+        { slotIndex: 3, isPlayer: false, fighterId: f3, team: 'emerald', label: 'Bot 3' },
+      ],
+    };
+  }
+  if (preset === '2v2') {
+    return {
+      ruleMode: 'teams',
+      slots: [
+        { slotIndex: 0, isPlayer: true, fighterId: playerId, team: 'blue', label: 'J1' },
+        { slotIndex: 1, isPlayer: false, fighterId: f1, team: 'blue', label: 'Aliado' },
+        { slotIndex: 2, isPlayer: false, fighterId: f2, team: 'red', label: 'Bot 2' },
+        { slotIndex: 3, isPlayer: false, fighterId: f3, team: 'red', label: 'Bot 3' },
+      ],
+    };
+  }
+  if (preset === '1v3') {
+    return {
+      ruleMode: 'teams',
+      slots: [
+        { slotIndex: 0, isPlayer: true, fighterId: playerId, team: 'blue', label: 'J1' },
+        { slotIndex: 1, isPlayer: false, fighterId: f1, team: 'red', label: 'Bot 1' },
+        { slotIndex: 2, isPlayer: false, fighterId: f2, team: 'red', label: 'Bot 2' },
+        { slotIndex: 3, isPlayer: false, fighterId: f3, team: 'red', label: 'Bot 3' },
+      ],
+    };
+  }
+  // 1v4 Deathmatch (5 fighters!)
+  return {
+    ruleMode: 'teams',
+    slots: [
+      { slotIndex: 0, isPlayer: true, fighterId: playerId, team: 'blue', label: 'J1' },
+      { slotIndex: 1, isPlayer: false, fighterId: f1, team: 'red', label: 'Bot 1' },
+      { slotIndex: 2, isPlayer: false, fighterId: f2, team: 'red', label: 'Bot 2' },
+      { slotIndex: 3, isPlayer: false, fighterId: f3, team: 'red', label: 'Bot 3' },
+      { slotIndex: 4, isPlayer: false, fighterId: f4, team: 'red', label: 'Bot 4' },
+    ],
+  };
+}
 
 export const FIGHTERS: Record<FighterId, FighterProfile> = {
   kael: {
@@ -170,8 +289,11 @@ export const STAGES: Record<StageId, StageProfile> = {
     ],
     blastZones: { left: -21, right: 21, top: 18, bottom: -13 },
     spawnPoints: [
-      { x: -4.2, y: 2.5 },
-      { x: 4.2, y: 2.5 },
+      { x: -5.4, y: 2.2 },
+      { x: 5.4, y: 2.2 },
+      { x: -4.8, y: 5.0 },
+      { x: 4.8, y: 5.0 },
+      { x: 0, y: 7.8 },
     ],
   },
   pillar_sanctuary: {
@@ -230,8 +352,11 @@ export const STAGES: Record<StageId, StageProfile> = {
     ],
     blastZones: { left: -21, right: 21, top: 18, bottom: -13 },
     spawnPoints: [
-      { x: -3.8, y: 2.5 },
-      { x: 3.8, y: 2.5 },
+      { x: -4.8, y: 2.2 },
+      { x: 4.8, y: 2.2 },
+      { x: -1.8, y: 2.2 },
+      { x: 1.8, y: 2.2 },
+      { x: 0, y: 7.4 },
     ],
   },
   golden_summit: {
@@ -252,8 +377,11 @@ export const STAGES: Record<StageId, StageProfile> = {
     ],
     blastZones: { left: -22, right: 22, top: 18, bottom: -13 },
     spawnPoints: [
-      { x: -4.8, y: 2.5 },
-      { x: 4.8, y: 2.5 },
+      { x: -6.2, y: 2.2 },
+      { x: 6.2, y: 2.2 },
+      { x: -2.6, y: 2.2 },
+      { x: 2.6, y: 2.2 },
+      { x: 0, y: 5.4 },
     ],
   },
 };
@@ -326,3 +454,4 @@ export function saveLocalRecords(records: LocalRecords): void {
     // Ignore storage quota errors
   }
 }
+

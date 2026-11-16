@@ -16,6 +16,7 @@ export interface FighterRig {
   shieldMesh: THREE.Mesh;
   slashArc: THREE.Mesh;
   playerRing: THREE.Mesh;
+  markerDiamond: THREE.Mesh;
   hitFlashMaterials: THREE.MeshStandardMaterial[];
   baseEmissives: THREE.Color[];
 }
@@ -69,7 +70,8 @@ function makeDaggerGeometry(): THREE.ExtrudeGeometry {
 
 export function buildFighterRig(
   fighterId: FighterId,
-  isPlayer: boolean,
+  accentColorHex: number,
+  showOverheadMarker: boolean,
   textures: ProceduralTextureSet,
 ): FighterRig {
   const root = new THREE.Group();
@@ -449,7 +451,7 @@ export function buildFighterRig(
   const shieldMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.15, 20, 16),
     new THREE.MeshBasicMaterial({
-      color: isPlayer ? 0x38bdf8 : 0xf43f5e,
+      color: accentColorHex,
       transparent: true,
       opacity: 0.34,
       depthWrite: false,
@@ -474,20 +476,31 @@ export function buildFighterRig(
   slashArc.visible = false;
   root.add(slashArc);
 
-  // Subtle grounded player/AI ring at feet
+  // Subtle grounded player/team ring at feet
   const playerRing = new THREE.Mesh(
     new THREE.RingGeometry(0.46, 0.58, 24),
     new THREE.MeshBasicMaterial({
-      color: isPlayer ? 0x38bdf8 : 0xf43f5e,
+      color: accentColorHex,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.78,
       depthWrite: false,
     }),
   );
   playerRing.rotation.x = -Math.PI / 2;
   playerRing.position.y = 0.03;
   root.add(playerRing);
+
+  // Overhead team/player diamond marker for multi-fighter readability
+  const markerDiamond = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.14, 0),
+    new THREE.MeshBasicMaterial({
+      color: accentColorHex,
+    }),
+  );
+  markerDiamond.position.set(0, 2.55, 0);
+  markerDiamond.visible = showOverheadMarker;
+  root.add(markerDiamond);
 
   return {
     root,
@@ -503,6 +516,7 @@ export function buildFighterRig(
     shieldMesh,
     slashArc,
     playerRing,
+    markerDiamond,
     hitFlashMaterials,
     baseEmissives,
   };

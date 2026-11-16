@@ -1,6 +1,9 @@
 export type FighterId = 'kael' | 'vespera' | 'titan' | 'lyra';
 export type StageId = 'sky_temple' | 'pillar_sanctuary' | 'golden_summit';
 export type GameMode = 'tournament' | 'quick';
+export type MatchRuleMode = 'ffa' | 'teams';
+export type TeamId = 'blue' | 'red' | 'amber' | 'emerald' | 'violet';
+export type MatchPresetId = '1v1' | 'ffa4' | '2v2' | '1v3' | '1v4';
 export type ScreenState = 'title' | 'select' | 'playing' | 'paused' | 'victory' | 'defeat';
 
 export type FighterActionState =
@@ -91,10 +94,23 @@ export interface StageProfile {
     top: number;
     bottom: number;
   };
-  spawnPoints: [
-    { x: number; y: number },
-    { x: number; y: number }
-  ];
+  spawnPoints: Array<{ x: number; y: number }>;
+}
+
+export interface CombatantSlot {
+  slotIndex: number;
+  isPlayer: boolean;
+  fighterId: FighterId;
+  team: TeamId;
+  label: string;
+}
+
+export interface MatchConfig {
+  ruleMode: MatchRuleMode;
+  stageId: StageId;
+  aiLevel: number;
+  slots: CombatantSlot[];
+  roundLabel?: string;
 }
 
 export interface TournamentRound {
@@ -106,14 +122,18 @@ export interface TournamentRound {
 }
 
 export interface FighterHudState {
+  slotIndex: number;
   id: FighterId;
   name: string;
+  label: string;
   isPlayer: boolean;
+  team: TeamId;
   damage: number;
   stocks: number;
   maxStocks: number;
   shield: number;
   isShielding: boolean;
+  eliminated: boolean;
   action: FighterActionState;
   lastHitTimestamp: number;
   offscreen: {
@@ -140,7 +160,7 @@ export interface MatchStats {
 }
 
 export interface HudSnapshot {
-  fighters: [FighterHudState, FighterHudState];
+  fighters: FighterHudState[];
   elapsedSec: number;
   banner: MatchBanner | null;
   stats: MatchStats;

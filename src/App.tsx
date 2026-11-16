@@ -5,17 +5,23 @@ import { SelectOverlay } from './components/SelectOverlay';
 import { TitleOverlay } from './components/TitleOverlay';
 import {
   AI_LEVEL_LABELS,
+  FFA_SLOT_TEAMS,
   STAGES,
+  buildPresetSlots,
   buildTournamentLadder,
   loadLocalRecords,
   saveLocalRecords,
 } from './game/data';
 import { SmashGameEngine } from './game/engine';
 import type {
+  CombatantSlot,
   FighterId,
   GameMode,
   HudSnapshot,
   LocalRecords,
+  MatchConfig,
+  MatchPresetId,
+  MatchRuleMode,
   MatchStats,
   ScreenState,
   StageId,
@@ -25,27 +31,35 @@ import type {
 const INITIAL_HUD: HudSnapshot = {
   fighters: [
     {
+      slotIndex: 0,
       id: 'kael',
       name: 'Kael',
+      label: 'J1',
       isPlayer: true,
+      team: 'blue',
       damage: 0,
       stocks: 3,
       maxStocks: 3,
       shield: 100,
       isShielding: false,
+      eliminated: false,
       action: 'idle',
       lastHitTimestamp: 0,
       offscreen: { visible: false, xPct: 50, yPct: 50, angleRad: 0 },
     },
     {
+      slotIndex: 1,
       id: 'vespera',
       name: 'Vespera',
+      label: 'Bot 1',
       isPlayer: false,
+      team: 'red',
       damage: 0,
       stocks: 3,
       maxStocks: 3,
       shield: 100,
       isShielding: false,
+      eliminated: false,
       action: 'idle',
       lastHitTimestamp: 0,
       offscreen: { visible: false, xPct: 50, yPct: 50, angleRad: 0 },
@@ -63,6 +77,15 @@ const INITIAL_HUD: HudSnapshot = {
   },
 };
 
+function buildFormatSummary(ruleMode: MatchRuleMode, slots: CombatantSlot[]): string {
+  if (ruleMode === 'ffa') {
+    return slots.length === 2 ? '1 vs 1' : `Todos vs Todos (${slots.length})`;
+  }
+  const blueCount = slots.filter((s) => s.team === 'blue').length;
+  const redCount = slots.filter((s) => s.team === 'red').length;
+  return `${blueCount} vs ${redCount}`;
+}
+
 export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<SmashGameEngine | null>(null);
@@ -70,9 +93,12 @@ export default function App() {
   const [screen, setScreen] = useState<ScreenState>('title');
   const [mode, setMode] = useState<GameMode>('tournament');
   const [playerId, setPlayerId] = useState<FighterId>('kael');
-  const [opponentId, setOpponentId] = useState<FighterId>('vespera');
   const [stageId, setStageId] = useState<StageId>('sky_temple');
   const [aiLevel, setAiLevel] = useState<number>(2);
+
+  const [presetId, setPresetId] = useState<MatchPresetId | 'custom'>('ffa4');
+  const [ruleMode, setRuleMode] = useState<MatchRuleMode>('ffa');
+  const [slots, setSlots] = useState<CombatantSlot[]>(() => buildPresetSlots('ffa4', 'kael').slots);
 
   const [tournamentLadder, setTournamentLadder] = useState<TournamentRound[]>(() =>
     buildTournamentLadder('kael'),
@@ -160,11 +186,55 @@ export default function App() {
   // Keep 3D turntable showcase synced while on Select screen
   useEffect(() => {
     if (screen === 'select' && engineRef.current) {
-      const previewStage =
-        mode === 'tournament' ? 'sky_temple' : stageId;
+      const previewStage = mode === 'tournament' ? 'sky_temple' : stageId;
       engineRef.current.setupSelectScene(playerId, previewStage);
     }
   }, [screen, playerId, stageId, mode]);
+
+  const handlePlayerChange = useCallback((nextId: FighterId) => {
+    setPlayerId(nextId);
+    setSlots((prev) =>
+      prev.map((s) => (s.isPlayer ? { ...s, fighterId: nextId } : s)),
+    );
+  }, []);
+
+  const handleSelectPreset = useCallback(
+    (nextPreset: MatchPresetId) => {
+      const built = buildPresetSlots(nextPreset, playerId);
+      setPresetId(nextPreset);
+      setRuleMode(built.ruleMode);
+      setSlots(built.slots);
+    },
+    [playerId],
+  );
+
+  const handleRuleModeChange = useCallback((nextRule: MatchRuleMode) => {
+    setPresetId('custom');
+    setRuleMode(nextRule);
+    setSlots((prev) =>
+      prev.map((s, idx) => {
+        if (nextRule === 'ffa') {
+          return {
+            ...s,
+            team: FFA_SLOT_TEAMS[idx % FFA_SLOT_TEAMS.length],
+            label: s.isPlayer ? 'J1' : `Bot ${idx}`,
+          };
+        }
+        // Teams mode: player on Blue, bots default to Red unless 4 slots (make Bot 1 ally for instant 2v2 feel)
+        const defaultBlue = s.isPlayer || (prev.length === 4 && idx === 1);
+        return {
+          ...s,
+          team: defaultBlue ? 'blue' : 'red',
+          label: s.isPlayer ? 'J1' : defaultBlue ? 'Aliado' : `Bot ${idx}`,
+        };
+      }),
+    );
+  }, []);
+
+  const handleSlotsChange = useCallback((nextSlots: CombatantSlot[]) => {
+    setPresetId('custom');
+    setSlots(nextSlots);
+  }, []);
 
   const handleToggleMute = useCallback(() => {
     const eng = engineRef.current;
@@ -179,6 +249,26 @@ export default function App() {
     setScreen('select');
   }, []);
 
+  const buildTournamentMatchConfig = useCallback(
+    (round: TournamentRound, totalRounds: number): MatchConfig => ({
+      ruleMode: 'ffa',
+      stageId: round.stageId,
+      aiLevel: round.aiLevel,
+      roundLabel: `Ronda ${round.round}/${totalRounds} · ${round.aiLabel}`,
+      slots: [
+        { slotIndex: 0, isPlayer: true, fighterId: playerId, team: 'blue', label: 'J1' },
+        {
+          slotIndex: 1,
+          isPlayer: false,
+          fighterId: round.opponentId,
+          team: 'red',
+          label: 'Bot 1',
+        },
+      ],
+    }),
+    [playerId],
+  );
+
   const handleStartMatch = useCallback(() => {
     const eng = engineRef.current;
     if (!eng) return;
@@ -189,28 +279,22 @@ export default function App() {
       setTournamentRoundIdx(0);
       setTournamentElapsedAcc(0);
       const first = ladder[0];
-      setOpponentId(first.opponentId);
       setStageId(first.stageId);
       setAiLevel(first.aiLevel);
       setScreen('playing');
-      eng.startMatch(
-        playerId,
-        first.opponentId,
-        first.stageId,
-        first.aiLevel,
-        `Ronda 1/${ladder.length} · ${first.aiLabel}`,
-      );
+      eng.startMatch(buildTournamentMatchConfig(first, ladder.length));
     } else {
+      const formatText = buildFormatSummary(ruleMode, slots);
       setScreen('playing');
-      eng.startMatch(
-        playerId,
-        opponentId,
+      eng.startMatch({
+        ruleMode,
         stageId,
         aiLevel,
-        AI_LEVEL_LABELS[aiLevel],
-      );
+        slots,
+        roundLabel: `${formatText} · ${AI_LEVEL_LABELS[aiLevel]}`,
+      });
     }
-  }, [mode, playerId, opponentId, stageId, aiLevel]);
+  }, [mode, playerId, buildTournamentMatchConfig, ruleMode, slots, stageId, aiLevel]);
 
   const handleNextTournamentRound = useCallback(() => {
     const eng = engineRef.current;
@@ -219,40 +303,33 @@ export default function App() {
     const round = tournamentLadder[nextIdx];
     if (!round) return;
     setTournamentRoundIdx(nextIdx);
-    setOpponentId(round.opponentId);
     setStageId(round.stageId);
     setAiLevel(round.aiLevel);
     setScreen('playing');
-    eng.startMatch(
-      playerId,
-      round.opponentId,
-      round.stageId,
-      round.aiLevel,
-      `Ronda ${round.round}/${tournamentLadder.length} · ${round.aiLabel}`,
-    );
-  }, [tournamentRoundIdx, tournamentLadder, playerId]);
+    eng.startMatch(buildTournamentMatchConfig(round, tournamentLadder.length));
+  }, [tournamentRoundIdx, tournamentLadder, buildTournamentMatchConfig]);
 
   const handleRestartMatch = useCallback(() => {
     const eng = engineRef.current;
     if (!eng) return;
     if (mode === 'tournament') {
-      // Restart tournament from Round 1 if won full tournament, or retry current round on defeat
       if (screen === 'victory') {
         handleStartMatch();
         return;
       }
       const round = tournamentLadder[tournamentRoundIdx];
       setScreen('playing');
-      eng.startMatch(
-        playerId,
-        round.opponentId,
-        round.stageId,
-        round.aiLevel,
-        `Ronda ${round.round}/${tournamentLadder.length} · ${round.aiLabel}`,
-      );
+      eng.startMatch(buildTournamentMatchConfig(round, tournamentLadder.length));
     } else {
+      const formatText = buildFormatSummary(ruleMode, slots);
       setScreen('playing');
-      eng.startMatch(playerId, opponentId, stageId, aiLevel, AI_LEVEL_LABELS[aiLevel]);
+      eng.startMatch({
+        ruleMode,
+        stageId,
+        aiLevel,
+        slots,
+        roundLabel: `${formatText} · ${AI_LEVEL_LABELS[aiLevel]}`,
+      });
     }
   }, [
     mode,
@@ -260,8 +337,9 @@ export default function App() {
     handleStartMatch,
     tournamentLadder,
     tournamentRoundIdx,
-    playerId,
-    opponentId,
+    buildTournamentMatchConfig,
+    ruleMode,
+    slots,
     stageId,
     aiLevel,
   ]);
@@ -290,7 +368,7 @@ export default function App() {
   const activeModeLabel =
     mode === 'tournament'
       ? `Torneo · Ronda ${tournamentRoundIdx + 1}/${tournamentLadder.length} · Nv.${aiLevel}`
-      : `Combate Rápido · ${AI_LEVEL_LABELS[aiLevel]}`;
+      : `${buildFormatSummary(ruleMode, slots)} · Nv.${aiLevel}`;
 
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-[#0B1324]">
@@ -323,16 +401,20 @@ export default function App() {
         <SelectOverlay
           mode={mode}
           playerId={playerId}
-          opponentId={opponentId}
           stageId={stageId}
           aiLevel={aiLevel}
+          presetId={presetId}
+          ruleMode={ruleMode}
+          slots={slots}
           muted={muted}
           onToggleMute={handleToggleMute}
           onModeChange={setMode}
-          onPlayerChange={setPlayerId}
-          onOpponentChange={setOpponentId}
+          onPlayerChange={handlePlayerChange}
           onStageChange={setStageId}
           onAiLevelChange={setAiLevel}
+          onSelectPreset={handleSelectPreset}
+          onRuleModeChange={handleRuleModeChange}
+          onSlotsChange={handleSlotsChange}
           onStartMatch={handleStartMatch}
           onBack={handleGoTitle}
         />
