@@ -82,6 +82,9 @@ interface FighterRuntime {
   animTime: number;
   lastHitTimestamp: number;
   respawnTimer: number;
+  reflectTimer: number;
+  stoneTimer: number;
+  upSpecialPhase2Done: boolean;
   // AI internal state
   aiInput: InputState;
   aiDecisionTimer: number;
@@ -95,7 +98,16 @@ interface Projectile {
   ownerTeam: TeamId;
   ownerIsPlayer: boolean;
   fighterId: FighterId;
-  behavior: 'solar_bomb' | 'wind_homing' | 'shockwave';
+  behavior:
+    | 'solar_bomb'
+    | 'wind_homing'
+    | 'shockwave'
+    | 'bouncing_electric'
+    | 'bouncing_fire'
+    | 'boomerang'
+    | 'laser'
+    | 'star_shot'
+    | 'cutter_wave';
   launchDir: 'side' | 'up';
   x: number;
   y: number;
@@ -105,6 +117,8 @@ interface Projectile {
   damage: number;
   knockback: number;
   life: number;
+  age: number;
+  returning: boolean;
   mesh: THREE.Mesh;
 }
 
@@ -463,7 +477,7 @@ export class SmashGameEngine {
       groundedPlatformId: null,
       coyoteTimer: 0,
       dropThroughTimer: 0,
-      jumpsLeft: profileId === 'vespera' ? 2 : 1,
+      jumpsLeft: this.getMaxAirJumps(profileId),
       upSpecialUsed: false,
       damage: 0,
       stocks: MAX_STOCKS,
@@ -483,11 +497,20 @@ export class SmashGameEngine {
       animTime: slotIndex * 0.35,
       lastHitTimestamp: 0,
       respawnTimer: 0,
+      reflectTimer: 0,
+      stoneTimer: 0,
+      upSpecialPhase2Done: false,
       aiInput: this.createEmptyInput(),
       aiDecisionTimer: 0.08 + slotIndex * 0.04,
       aiDesiredMove: 0,
       aiWantsShield: false,
     };
+  }
+
+  private getMaxAirJumps(id: FighterId): number {
+    if (id === 'puffo') return 5;
+    if (id === 'vespera') return 2;
+    return 1;
   }
 
   // ==================== PUBLIC SCENE MODES ====================
@@ -566,8 +589,9 @@ export class SmashGameEngine {
       this.selectShowcaseRig.root.position.set(2.4, 0.45, 1.5);
       this.selectShowcaseRig.root.scale.setScalar(1.22);
       this.selectShowcaseRig.playerRing.visible = false;
+      this.selectSpinAngle = -1.95;
+      this.selectShowcaseRig.root.rotation.y = this.selectSpinAngle;
       this.scene.add(this.selectShowcaseRig.root);
-      this.selectSpinAngle = 0.35;
     }
   }
 
@@ -992,9 +1016,15 @@ export class SmashGameEngine {
       f.hitFlashTimer = Math.max(0, f.hitFlashTimer - dt);
     }
 
-    // Invulnerability decay
+    // Invulnerability, reflector & stone decay
     if (f.invulnTimer > 0) {
       f.invulnTimer = Math.max(0, f.invulnTimer - dt);
+    }
+    if (f.reflectTimer > 0) {
+      f.reflectTimer = Math.max(0, f.reflectTimer - dt);
+    }
+    if (f.stoneTimer > 0) {
+      f.stoneTimer = Math.max(0, f.stoneTimer - dt);
     }
 
     // Squash & stretch elastic return
@@ -1007,6 +1037,9 @@ export class SmashGameEngine {
       f.vy = -4.0;
       f.y += f.vy * dt;
       f.vx = 0;
+      f.reflectTimer = 0;
+      f.stoneTimer = 0;
+      f.upSpecialPhase2Done = false;
       if (f.respawnTimer <= 0 || f.y <= 3.8) {
         f.action = 'fall';
         f.vy = 0;
@@ -1077,26 +1110,85 @@ export class SmashGameEngine {
       if (f.action === 'smash_charge') {
         f.vx *= Math.pow(0.05, dt);
         if (f.actionTimer <= 0) {
-          f.action = 'smash';
-          f.actionDuration = 0.28;
-          f.actionTimer = 0.28;
           f.hitTargetSlots.clear();
-          this.sound.playSwing(true);
-          f.vx = f.facing * 4.5;
+          if (f.profileId === 'puffo' && f.attackDir === 'down') {
+            f.action = 'smash';
+            f.stoneTimer = 0.56;
+            f.actionDuration = 0.56;
+            f.actionTimer = 0.56;
+            f.vx = 0;
+            f.vy = -17;
+            this.sound.playSpecial('puffo');
+            this.spawnParticles(f.x, f.y + 0.8, 0, 0x94a3b8, 10, 5.5, 0.5);
+          } else {
+            f.action = 'smash';
+            f.actionDuration = 0.28;
+            f.actionTimer = 0.28;
+            this.sound.playSwing(true);
+            if (f.profileId === 'marco' || f.profileId === 'vulpex') {
+              f.reflectTimer = 0.24;
+              this.spawnParticles(f.x, f.y + 0.9, 0, 0x38bdf8, 8, 5.5, 0.45);
+            }
+            if (f.profileId === 'voltik') {
+              f.vx = 0;
+              this.spawnParticles(f.x, f.y + 3.0, 0, 0xfde047, 14, 7.5, 0.65);
+            } else {
+              f.vx = f.facing * 4.5;
+            }
+          }
         }
       } else {
         // Active strike window check against all valid enemies
         const elapsedInMove = f.actionDuration - f.actionTimer;
-        if (elapsedInMove >= 0.05 && elapsedInMove <= f.actionDuration * 0.65) {
+        if (
+          f.stoneTimer > 0 ||
+          (elapsedInMove >= 0.05 && elapsedInMove <= f.actionDuration * 0.68)
+        ) {
           this.evaluateMeleeHit(f);
         }
 
-        if (f.action === 'up_special') {
-          f.vx = THREE.MathUtils.lerp(
-            f.vx,
-            (inp.right ? 1 : inp.left ? -1 : 0) * profile.airSpeed * 0.7,
-            dt * 5,
-          );
+        if (f.stoneTimer > 0) {
+          f.vx = 0;
+          f.vy = Math.min(-16, f.vy - 30 * dt);
+        } else if (f.action === 'up_special') {
+          const moveDir = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
+          if (f.profileId === 'voltik') {
+            if (elapsedInMove >= 0.19 && !f.upSpecialPhase2Done) {
+              f.upSpecialPhase2Done = true;
+              const dir2 = moveDir !== 0 ? moveDir : -f.facing;
+              f.facing = dir2 > 0 ? 1 : -1;
+              f.vx = dir2 * 6.5;
+              f.vy = 18.2;
+              this.spawnParticles(f.x, f.y + 0.9, 0, 0xfde047, 14, 7.5, 0.6);
+            }
+          } else if (f.profileId === 'vulpex') {
+            if (elapsedInMove < 0.14) {
+              f.vx = 0;
+              f.vy = 0.5;
+              if (Math.random() < 0.45) {
+                this.spawnParticles(f.x, f.y + 0.9, 0, 0xf97316, 2, 3.2, 0.32);
+              }
+            } else if (!f.upSpecialPhase2Done) {
+              f.upSpecialPhase2Done = true;
+              if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
+              f.vx = (moveDir !== 0 ? moveDir : f.facing * 0.45) * 15.5;
+              f.vy = profile.upSpecialBoost;
+              this.spawnParticles(f.x, f.y + 0.8, 0, 0xf97316, 16, 8.5, 0.65);
+            }
+          } else if (f.profileId === 'puffo') {
+            if (elapsedInMove >= 0.22 && !f.upSpecialPhase2Done) {
+              f.upSpecialPhase2Done = true;
+              f.vx = 0;
+              f.vy = -21;
+              this.spawnParticles(f.x, f.y + 0.8, 0, 0x67e8f9, 8, 5, 0.45);
+            }
+          } else {
+            f.vx = THREE.MathUtils.lerp(
+              f.vx,
+              moveDir * profile.airSpeed * 0.7,
+              dt * 5,
+            );
+          }
         } else if (f.grounded) {
           f.vx *= Math.pow(0.04, dt);
         } else {
@@ -1106,9 +1198,56 @@ export class SmashGameEngine {
         }
       }
 
+      const wasGrounded = f.grounded;
       this.applyGravityAndPlatforms(f, profile, dt);
 
+      if (f.stoneTimer > 0 && !wasGrounded && f.grounded) {
+        this.spawnParticles(f.x, f.y + 0.15, 0, 0x94a3b8, 12, 6.5, 0.55);
+        this.cameraTrauma = Math.min(1, this.cameraTrauma + 0.25);
+      }
+
+      if (
+        f.profileId === 'puffo' &&
+        f.action === 'up_special' &&
+        f.upSpecialPhase2Done &&
+        f.grounded
+      ) {
+        const waveGeo = new THREE.ConeGeometry(0.32, 0.8, 6);
+        waveGeo.rotateZ(-f.facing * (Math.PI / 2));
+        const waveMesh = new THREE.Mesh(
+          waveGeo,
+          new THREE.MeshStandardMaterial({
+            color: 0x67e8f9,
+            emissive: 0x22d3ee,
+            emissiveIntensity: 1.9,
+            roughness: 0.2,
+          }),
+        );
+        this.spawnProjectile(
+          f.slotIndex,
+          f.team,
+          f.isPlayer,
+          'puffo',
+          'cutter_wave',
+          'side',
+          f.x + f.facing * 0.85,
+          f.y + 0.45,
+          f.facing * 15.5,
+          0,
+          0.55,
+          9,
+          9.8,
+          0.55,
+          waveMesh,
+        );
+        this.spawnParticles(f.x + f.facing * 0.6, f.y + 0.35, 0, 0x67e8f9, 10, 6.0, 0.5);
+        f.action = 'idle';
+        f.actionTimer = 0;
+        return;
+      }
+
       if (f.actionTimer <= 0 && f.action !== 'smash_charge') {
+        f.stoneTimer = 0;
         f.action = f.grounded ? 'idle' : 'fall';
       }
       return;
@@ -1119,7 +1258,8 @@ export class SmashGameEngine {
       if (f.grounded) {
         f.action = 'shield';
         f.vx *= Math.pow(0.02, dt);
-        f.shield = Math.max(0, f.shield - 18 * dt);
+        const shieldDrain = f.profileId === 'arion' ? 11.7 : 18;
+        f.shield = Math.max(0, f.shield - shieldDrain * dt);
         if (f.shield <= 1) {
           f.action = 'dizzy';
           f.shieldBrokenTimer = 2.2;
@@ -1169,8 +1309,8 @@ export class SmashGameEngine {
       }
     }
 
-    // Jump, Double Jump & Vespera Triple Jump (with Coyote Time + Jump Buffer)
-    const maxAirJumps = f.profileId === 'vespera' ? 2 : 1;
+    // Jump & Multi-Air-Jump (Puffo 5x, Vespera 2x, others 1x)
+    const maxAirJumps = this.getMaxAirJumps(f.profileId);
     if (inp.jumpBuffer > 0) {
       if (f.grounded || f.coyoteTimer > 0) {
         inp.jumpBuffer = 0;
@@ -1297,20 +1437,28 @@ export class SmashGameEngine {
       damage,
       knockback,
       life,
+      age: 0,
+      returning: false,
       mesh,
     });
   }
 
   private startNeutralSpecial(f: FighterRuntime, _profile: FighterProfile): void {
     f.action = 'special';
-    f.actionDuration = f.profileId === 'vespera' ? 0.28 : 0.34;
+    f.actionDuration =
+      f.profileId === 'vulpex'
+        ? 0.19
+        : f.profileId === 'vespera'
+          ? 0.28
+          : f.profileId === 'selene'
+            ? 0.42
+            : 0.34;
     f.actionTimer = f.actionDuration;
     f.hitTargetSlots.clear();
     f.attackDir = 'neutral';
     this.sound.playSpecial(f.profileId);
 
     if (f.profileId === 'kael') {
-      // Orbe Solar Explosivo: detonates in AoE on hit or max range
       const mesh = new THREE.Mesh(
         new THREE.SphereGeometry(0.36, 12, 10),
         new THREE.MeshStandardMaterial({
@@ -1339,7 +1487,6 @@ export class SmashGameEngine {
       );
       this.spawnParticles(f.x + f.facing * 0.9, f.y + 1.05, 0, 0xf97316, 10, 5.5, 0.58);
     } else if (f.profileId === 'lyra') {
-      // Céfiro Arcano: vertical-homing wind vortex that launches upward
       const mesh = new THREE.Mesh(
         new THREE.TorusGeometry(0.38, 0.12, 8, 18),
         new THREE.MeshStandardMaterial({
@@ -1368,13 +1515,11 @@ export class SmashGameEngine {
       );
       this.spawnParticles(f.x + f.facing * 0.9, f.y + 1.05, 0, 0x34d399, 10, 5, 0.55);
     } else if (f.profileId === 'vespera') {
-      // Destello Umbral: phase-blink dash with brief invulnerability that cuts through foes
       f.invulnTimer = Math.max(f.invulnTimer, 0.22);
       f.vx = f.facing * 23;
       f.vy = Math.max(0, f.vy * 0.15);
       this.spawnParticles(f.x, f.y + 1.0, 0, 0x22d3ee, 14, 7.5, 0.65);
-    } else {
-      // Titán-G Onda Sísmica: slams down and fires dual golden shockwaves left & right!
+    } else if (f.profileId === 'titan') {
       f.vy = f.grounded ? 1.5 : -17;
       f.vx = 0;
       this.cameraTrauma = Math.min(1, this.cameraTrauma + 0.42);
@@ -1407,21 +1552,187 @@ export class SmashGameEngine {
           waveMesh,
         );
       });
+    } else if (f.profileId === 'voltik') {
+      // Chispa Rastrera (Thunder Jolt): bouncing electric orb
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.3, 12, 10),
+        new THREE.MeshStandardMaterial({
+          color: 0xfef08a,
+          emissive: 0xfacc15,
+          emissiveIntensity: 2.3,
+          roughness: 0.18,
+        }),
+      );
+      this.spawnProjectile(
+        f.slotIndex,
+        f.team,
+        f.isPlayer,
+        'voltik',
+        'bouncing_electric',
+        'side',
+        f.x + f.facing * 0.85,
+        f.y + 0.95,
+        f.facing * 10.5,
+        2.0,
+        0.48,
+        8,
+        8.0,
+        1.8,
+        mesh,
+      );
+      this.spawnParticles(f.x + f.facing * 0.8, f.y + 0.95, 0, 0xfde047, 10, 5.5, 0.5);
+    } else if (f.profileId === 'marco') {
+      // Bola de Fuego (Fireball): fast bouncing fireball
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.28, 12, 10),
+        new THREE.MeshStandardMaterial({
+          color: 0xfb923c,
+          emissive: 0xea580c,
+          emissiveIntensity: 2.2,
+          roughness: 0.2,
+        }),
+      );
+      this.spawnProjectile(
+        f.slotIndex,
+        f.team,
+        f.isPlayer,
+        'marco',
+        'bouncing_fire',
+        'side',
+        f.x + f.facing * 0.85,
+        f.y + 1.0,
+        f.facing * 12.2,
+        2.8,
+        0.46,
+        7,
+        7.8,
+        1.55,
+        mesh,
+      );
+      this.spawnParticles(f.x + f.facing * 0.8, f.y + 1.0, 0, 0xf97316, 10, 5.5, 0.48);
+    } else if (f.profileId === 'puffo') {
+      // Succión Estelar: draws nearby foes forward and blasts a golden star shot
+      for (const enemy of this.fighters) {
+        if (enemy.eliminated || !this.isEnemy(f, enemy) || enemy.action === 'respawn' || enemy.action === 'ko') {
+          continue;
+        }
+        const dx = enemy.x - f.x;
+        const dy = enemy.y - f.y;
+        if (dx * f.facing > 0 && dx * f.facing < 3.6 && Math.abs(dy) < 1.6) {
+          enemy.vx = -f.facing * 8.5;
+        }
+      }
+      const starMesh = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.38, 0),
+        new THREE.MeshStandardMaterial({
+          color: 0xfef08a,
+          emissive: 0xfbbf24,
+          emissiveIntensity: 2.2,
+          roughness: 0.15,
+        }),
+      );
+      this.spawnProjectile(
+        f.slotIndex,
+        f.team,
+        f.isPlayer,
+        'puffo',
+        'star_shot',
+        'side',
+        f.x + f.facing * 0.9,
+        f.y + 0.9,
+        f.facing * 14.5,
+        0,
+        0.54,
+        11,
+        11.0,
+        1.0,
+        starMesh,
+      );
+      this.spawnParticles(f.x + f.facing * 0.85, f.y + 0.9, 0, 0xfbbf24, 12, 6, 0.55);
+    } else if (f.profileId === 'selene') {
+      // Cristal de Nayru: cyan reflector crystal + centered magic burst
+      f.reflectTimer = 0.44;
+      this.spawnParticles(f.x, f.y + 1.05, 0, 0x38bdf8, 16, 7.2, 0.6);
+    } else if (f.profileId === 'arion') {
+      // Bumerán Vendaval: gale boomerang that returns to Arion
+      const boomMesh = new THREE.Mesh(
+        new THREE.TorusGeometry(0.36, 0.09, 6, 14, Math.PI * 1.25),
+        new THREE.MeshStandardMaterial({
+          color: 0x7dd3fc,
+          emissive: 0x38bdf8,
+          emissiveIntensity: 1.9,
+          roughness: 0.25,
+        }),
+      );
+      this.spawnProjectile(
+        f.slotIndex,
+        f.team,
+        f.isPlayer,
+        'arion',
+        'boomerang',
+        'up',
+        f.x + f.facing * 0.95,
+        f.y + 1.05,
+        f.facing * 16.5,
+        0.8,
+        0.52,
+        8,
+        8.6,
+        1.6,
+        boomMesh,
+      );
+      this.spawnParticles(f.x + f.facing * 0.85, f.y + 1.05, 0, 0x38bdf8, 8, 5, 0.45);
+    } else if (f.profileId === 'vulpex') {
+      // Láser Estelar: ultra-fast rapid plasma bolt
+      const laserMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.95, 0.09, 0.09),
+        new THREE.MeshStandardMaterial({
+          color: 0x67e8f9,
+          emissive: 0x22d3ee,
+          emissiveIntensity: 2.5,
+          roughness: 0.1,
+        }),
+      );
+      this.spawnProjectile(
+        f.slotIndex,
+        f.team,
+        f.isPlayer,
+        'vulpex',
+        'laser',
+        'side',
+        f.x + f.facing * 1.0,
+        f.y + 1.05,
+        f.facing * 29,
+        0,
+        0.38,
+        5,
+        2.5,
+        0.7,
+        laserMesh,
+      );
+      this.spawnParticles(f.x + f.facing * 0.9, f.y + 1.05, 0, 0x22d3ee, 6, 4.5, 0.35);
     }
   }
 
   private startUpSpecial(f: FighterRuntime, profile: FighterProfile, moveDir: number): void {
     f.action = 'up_special';
-    f.actionDuration = 0.38;
-    f.actionTimer = 0.38;
+    f.actionDuration =
+      f.profileId === 'puffo'
+        ? 0.56
+        : f.profileId === 'vulpex'
+          ? 0.52
+          : f.profileId === 'voltik'
+            ? 0.42
+            : 0.38;
+    f.actionTimer = f.actionDuration;
     f.hitTargetSlots.clear();
     f.attackDir = 'up';
     f.grounded = false;
     f.groundedPlatformId = null;
     f.upSpecialUsed = true;
+    f.upSpecialPhase2Done = false;
 
     if (f.profileId === 'vespera') {
-      // Teletransporte Cian: instant upward dimensional blink + whirl
       this.spawnParticles(f.x, f.y + 0.9, 0, 0x22d3ee, 14, 7, 0.65);
       f.y += 2.6;
       f.x += (moveDir !== 0 ? moveDir : f.facing) * 1.4;
@@ -1429,17 +1740,53 @@ export class SmashGameEngine {
       f.vy = profile.upSpecialBoost;
       f.vx = (moveDir !== 0 ? moveDir : f.facing) * 5.2;
     } else if (f.profileId === 'kael') {
-      // Ascenso Ígneo: blazing diagonal uppercut
       f.vy = profile.upSpecialBoost;
       if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
       f.vx = (moveDir !== 0 ? moveDir : f.facing) * 9.2;
     } else if (f.profileId === 'lyra') {
-      // Corriente Celestial: tall smooth wind updraft
       f.vy = profile.upSpecialBoost;
       if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
       f.vx = moveDir * 7.8;
+    } else if (f.profileId === 'voltik') {
+      // Ataque Relámpago phase 1: sharp angled zip before upward phase 2
+      if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
+      f.vx = (moveDir !== 0 ? moveDir : f.facing) * 14.5;
+      f.vy = 13.0;
+    } else if (f.profileId === 'puffo') {
+      // Corte Final phase 1: high rising arc before plummeting down
+      if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
+      f.vx = (moveDir !== 0 ? moveDir : f.facing * 0.4) * 5.8;
+      f.vy = profile.upSpecialBoost;
+    } else if (f.profileId === 'selene') {
+      // Viento de Farore: departure hit burst -> emerald teleport -> arrival burst
+      this.evaluateMeleeHit(f);
+      this.spawnParticles(f.x, f.y + 1.0, 0, 0x34d399, 16, 8, 0.65);
+      const dir = moveDir !== 0 ? moveDir : f.facing;
+      f.facing = dir > 0 ? 1 : -1;
+      f.y += 3.1;
+      f.x += dir * 2.1;
+      f.invulnTimer = Math.max(f.invulnTimer, 0.2);
+      f.vy = profile.upSpecialBoost;
+      f.vx = dir * 4.5;
+      f.hitTargetSlots.clear();
+      this.evaluateMeleeHit(f);
+    } else if (f.profileId === 'marco') {
+      // Super Salto Moneda: vertical coin-shower uppercut
+      if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
+      f.vy = profile.upSpecialBoost;
+      f.vx = (moveDir !== 0 ? moveDir : f.facing * 0.35) * 7.5;
+      this.spawnParticles(f.x, f.y + 1.4, 0, 0xfacc15, 16, 7.5, 0.72);
+    } else if (f.profileId === 'arion') {
+      // Ataque Circular 360°: soaring hero spin slash
+      if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
+      f.vy = profile.upSpecialBoost;
+      f.vx = moveDir * 7.2;
+      this.spawnParticles(f.x, f.y + 1.0, 0, 0x4ade80, 14, 7.5, 0.6);
+    } else if (f.profileId === 'vulpex') {
+      // Fuego Estelar phase 1: brief fiery stall before directional rocket
+      f.vx = 0;
+      f.vy = 0.5;
     } else {
-      // Titán-G Propulsión Áurea: armored rocket hammer ascent
       f.vy = profile.upSpecialBoost;
       if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
       f.vx = moveDir * 5.5;
@@ -1506,7 +1853,7 @@ export class SmashGameEngine {
       f.grounded = true;
       f.groundedPlatformId = landedPlat.id;
       f.coyoteTimer = 0.1;
-      f.jumpsLeft = f.profileId === 'vespera' ? 2 : 1;
+      f.jumpsLeft = this.getMaxAirJumps(f.profileId);
       f.upSpecialUsed = false;
     } else {
       if (f.grounded) {
@@ -1530,7 +1877,7 @@ export class SmashGameEngine {
         ? atkProfile.smashRange * 0.95
         : atkProfile.lightRange;
 
-    // Hitbox center offset
+    // Hitbox center offset & bespoke fighter overrides
     let hx = attacker.x + attacker.facing * (reach * 0.55);
     let hy = attacker.y + 1.05;
     if (attacker.attackDir === 'up') {
@@ -1541,7 +1888,7 @@ export class SmashGameEngine {
       hy = attacker.y + 0.55;
     }
 
-    const hitRadius =
+    let hitRadius =
       attacker.profileId === 'titan' && isSpecial
         ? 1.55
         : attacker.profileId === 'kael' && isSmash
@@ -1549,6 +1896,24 @@ export class SmashGameEngine {
           : isSmash
             ? 1.35
             : 1.15;
+
+    if (attacker.profileId === 'arion' && attacker.action === 'up_special') {
+      hx = attacker.x;
+      hy = attacker.y + 1.05;
+      hitRadius = 2.15;
+    } else if (attacker.profileId === 'selene' && attacker.action === 'special') {
+      hx = attacker.x;
+      hy = attacker.y + 1.05;
+      hitRadius = 1.65;
+    } else if (attacker.profileId === 'voltik' && isSmash) {
+      hx = attacker.x;
+      hy = attacker.y + 2.0;
+      hitRadius = 1.95;
+    } else if (attacker.stoneTimer > 0) {
+      hx = attacker.x;
+      hy = attacker.y + 0.7;
+      hitRadius = 1.55;
+    }
 
     const baseDmg = isSmash
       ? atkProfile.smashDamage
@@ -1573,9 +1938,10 @@ export class SmashGameEngine {
         continue;
       }
 
+      const effRadius = defender.profileId === 'voltik' ? hitRadius * 0.9 : hitRadius;
       const dx = defender.x - hx;
       const dy = defender.y + 1.0 - hy;
-      if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+      if (dx * dx + dy * dy <= effRadius * effRadius) {
         attacker.hitTargetSlots.add(defender.slotIndex);
         this.applyHit(
           attacker,
@@ -1601,17 +1967,26 @@ export class SmashGameEngine {
   ): void {
     // Shield check
     if (defender.action === 'shield') {
-      defender.shield = Math.max(0, defender.shield - damage * 1.9);
+      const drainMult = defender.profileId === 'arion' ? 1.25 : 1.9;
+      defender.shield = Math.max(0, defender.shield - damage * drainMult);
       this.sound.playShieldClang();
       this.spawnParticles(defender.x, defender.y + 1.1, 0, 0x38bdf8, 8, 6, 0.5);
       const pushDir =
         overrideSourceFacing ?? (attacker ? attacker.facing : defender.x >= 0 ? 1 : -1);
-      defender.vx += pushDir * 4.5;
+      defender.vx += pushDir * (defender.profileId === 'arion' ? 3.2 : 4.5);
       if (defender.shield <= 1) {
         defender.action = 'dizzy';
         defender.shieldBrokenTimer = 2.2;
         this.sound.playShieldBreak();
       }
+      return;
+    }
+
+    // Puffo Roca Cósmica: invincible stone drop resists knockback and damage
+    if (defender.stoneTimer > 0) {
+      defender.hitFlashTimer = 0.08;
+      this.sound.playShieldClang();
+      this.spawnParticles(defender.x, defender.y + 0.85, 0.25, 0x94a3b8, 10, 6.5, 0.5);
       return;
     }
 
@@ -1703,8 +2078,10 @@ export class SmashGameEngine {
       const owner = this.fighters.find((f) => f.slotIndex === proj.ownerSlotIndex) ?? null;
 
       proj.life -= dt;
+      proj.age += dt;
+      const prevY = proj.y;
 
-      // Fighter-specific projectile flight behavior: track closest valid enemy vertically
+      // Fighter-specific projectile flight behaviors
       if (proj.behavior === 'wind_homing') {
         let closestEnemy: FighterRuntime | null = null;
         let closestDistSq = Infinity;
@@ -1722,18 +2099,63 @@ export class SmashGameEngine {
           const desiredVy = THREE.MathUtils.clamp((closestEnemy.y + 1.0 - proj.y) * 3.2, -5.5, 5.5);
           proj.vy = THREE.MathUtils.lerp(proj.vy, desiredVy, 1 - Math.exp(-4.5 * dt));
         }
+      } else if (proj.behavior === 'bouncing_electric' || proj.behavior === 'bouncing_fire') {
+        proj.vy -= 26 * dt;
+      } else if (proj.behavior === 'boomerang') {
+        if (!proj.returning && proj.age >= 0.38) {
+          proj.returning = true;
+        }
+        if (proj.returning && owner && !owner.eliminated) {
+          const toOwnerX = owner.x - proj.x;
+          const toOwnerY = owner.y + 1.0 - proj.y;
+          const len = Math.hypot(toOwnerX, toOwnerY) || 1;
+          proj.vx = THREE.MathUtils.lerp(proj.vx, (toOwnerX / len) * 18.5, 1 - Math.exp(-6 * dt));
+          proj.vy = THREE.MathUtils.lerp(proj.vy, (toOwnerY / len) * 18.5, 1 - Math.exp(-6 * dt));
+        } else {
+          proj.vx *= Math.pow(0.18, dt);
+        }
       }
 
       proj.x += proj.vx * dt;
       proj.y += proj.vy * dt;
+
+      if (proj.behavior === 'bouncing_electric' || proj.behavior === 'bouncing_fire') {
+        if (proj.vy < 0) {
+          for (const plat of this.platformStates) {
+            const halfW = plat.width * 0.5 + 0.1;
+            if (
+              proj.x >= plat.x - halfW &&
+              proj.x <= plat.x + halfW &&
+              prevY >= plat.y - 0.1 &&
+              proj.y <= plat.y + 0.15
+            ) {
+              proj.y = plat.y + 0.15;
+              proj.vy = proj.behavior === 'bouncing_electric' ? 8.2 : 9.2;
+              break;
+            }
+          }
+        }
+      }
+
       proj.mesh.position.set(proj.x, proj.y, 0);
 
-      if (proj.behavior === 'shockwave') {
+      if (proj.behavior === 'shockwave' || proj.behavior === 'cutter_wave') {
         proj.mesh.rotation.y += dt * 12;
+      } else if (proj.behavior === 'laser') {
+        proj.mesh.rotation.x += dt * 18;
+      } else if (proj.behavior === 'boomerang') {
+        proj.mesh.rotation.z += dt * 22;
       } else {
         proj.mesh.rotation.z += dt * 10;
         proj.mesh.rotation.y += dt * 6;
       }
+
+      const caughtByOwner =
+        proj.behavior === 'boomerang' &&
+        proj.age >= 0.55 &&
+        owner !== null &&
+        !owner.eliminated &&
+        (owner.x - proj.x) ** 2 + (owner.y + 1.0 - proj.y) ** 2 <= 0.9 * 0.9;
 
       let hitTargetSlot = -1;
       const projFacing: 1 | -1 = proj.vx >= 0 ? 1 : -1;
@@ -1741,32 +2163,55 @@ export class SmashGameEngine {
         if (
           !this.isValidProjectileTarget(proj, target) ||
           target.invulnTimer > 0 ||
-          target.action === 'respawn' ||
-          target.action === 'dodge'
+          target.action === 'respawn'
         ) {
           continue;
         }
         const dx = target.x - proj.x;
         const dy = target.y + 1.0 - proj.y;
-        if (dx * dx + dy * dy <= (proj.radius + 0.7) ** 2) {
-          hitTargetSlot = target.slotIndex;
-          this.applyHit(
-            owner,
-            target,
-            proj.damage,
-            proj.knockback,
-            proj.launchDir,
-            proj.behavior === 'solar_bomb' || proj.behavior === 'shockwave',
-            proj.x,
-            projFacing,
-          );
+        const distSq = dx * dx + dy * dy;
+        const hitDistSq = (proj.radius + (target.profileId === 'voltik' ? 0.58 : 0.7)) ** 2;
+        if (distSq > hitDistSq) continue;
+
+        // Reflector check (Selene Nayru, Vulpex Shine, Marco Cape)
+        if (target.reflectTimer > 0) {
+          proj.vx *= -1.35;
+          proj.vy *= 1.15;
+          proj.damage = Math.round(proj.damage * 1.35);
+          proj.knockback *= 1.2;
+          proj.ownerSlotIndex = target.slotIndex;
+          proj.ownerTeam = target.team;
+          proj.ownerIsPlayer = target.isPlayer;
+          proj.life = Math.max(proj.life, 0.95);
+          this.sound.playReflect();
+          this.spawnParticles(proj.x, proj.y, 0.2, 0x38bdf8, 12, 7, 0.55);
+          hitTargetSlot = -2;
           break;
         }
+
+        if (target.action === 'dodge') {
+          continue;
+        }
+
+        hitTargetSlot = target.slotIndex;
+        this.applyHit(
+          owner,
+          target,
+          proj.damage,
+          proj.knockback,
+          proj.launchDir,
+          proj.behavior === 'solar_bomb' ||
+            proj.behavior === 'shockwave' ||
+            proj.behavior === 'star_shot' ||
+            proj.behavior === 'cutter_wave',
+          proj.x,
+          projFacing,
+        );
+        break;
       }
 
-      const expired = proj.life <= 0;
-      if (hitTargetSlot !== -1 || expired) {
-        // Kael's Solar Bomb explodes in an AoE fireball when impacting or expiring!
+      const expired = proj.life <= 0 || caughtByOwner;
+      if (hitTargetSlot >= 0 || expired) {
         if (proj.behavior === 'solar_bomb') {
           this.spawnParticles(proj.x, proj.y, 0.2, 0xf97316, 20, 10.5, 0.9);
           this.cameraTrauma = Math.min(1, this.cameraTrauma + 0.2);
@@ -1912,9 +2357,12 @@ export class SmashGameEngine {
     f.vy = 0;
     f.x = respawnOffsets[f.slotIndex % respawnOffsets.length];
     f.y = 8.5;
-    f.jumpsLeft = f.profileId === 'vespera' ? 2 : 1;
+    f.jumpsLeft = this.getMaxAirJumps(f.profileId);
     f.upSpecialUsed = false;
     f.invulnTimer = 2.2;
+    f.reflectTimer = 0;
+    f.stoneTimer = 0;
+    f.upSpecialPhase2Done = false;
     f.shield = 100;
     f.action = 'respawn';
     f.respawnTimer = 0.75;
@@ -2089,8 +2537,32 @@ export class SmashGameEngine {
     rig.bodyPivot.rotation.y = THREE.MathUtils.damp(rig.bodyPivot.rotation.y, targetRotY, 18, dt);
 
     // Squash & stretch
-    const baseScale = f.profileId === 'titan' ? 1.18 : f.profileId === 'vespera' ? 0.95 : f.profileId === 'lyra' ? 0.98 : 1.02;
+    const baseScale =
+      f.profileId === 'voltik'
+        ? 0.86
+        : f.profileId === 'puffo'
+          ? 0.9
+          : f.profileId === 'vulpex'
+            ? 0.96
+            : f.profileId === 'marco'
+              ? 0.98
+              : f.profileId === 'titan'
+                ? 1.18
+                : f.profileId === 'vespera'
+                  ? 0.95
+                  : f.profileId === 'lyra'
+                    ? 0.98
+                    : 1.02;
     rig.bodyPivot.scale.set(baseScale * f.squashX, baseScale * f.squashY, baseScale * f.squashX);
+
+    // Stone transformation & Reflect aura VFX
+    rig.stoneMesh.visible = f.stoneTimer > 0;
+    rig.bodyPivot.visible = f.stoneTimer <= 0;
+    rig.reflectAura.visible = f.reflectTimer > 0;
+    if (f.reflectTimer > 0) {
+      rig.reflectAura.rotation.y = f.animTime * 9;
+      rig.reflectAura.rotation.x = Math.sin(f.animTime * 6) * 0.25;
+    }
 
     // Invulnerability blink
     if (f.invulnTimer > 0) {
@@ -2128,6 +2600,7 @@ export class SmashGameEngine {
 
     // Slash arc visibility
     const showSlash =
+      f.stoneTimer <= 0 &&
       (f.action === 'light' || f.action === 'smash' || f.action === 'up_special') &&
       f.actionTimer > 0.04;
     rig.slashArc.visible = showSlash;

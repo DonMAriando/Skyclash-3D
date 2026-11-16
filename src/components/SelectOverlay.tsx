@@ -49,7 +49,18 @@ const PRESET_OPTIONS: Array<{ id: MatchPresetId; label: string }> = [
   { id: '1v4', label: '1 vs 4 Deathmatch' },
 ];
 
-const FIGHTER_ORDER: FighterId[] = ['kael', 'vespera', 'titan', 'lyra'];
+const FIGHTER_ORDER: FighterId[] = [
+  'kael',
+  'vespera',
+  'titan',
+  'lyra',
+  'voltik',
+  'puffo',
+  'selene',
+  'marco',
+  'arion',
+  'vulpex',
+];
 
 const StatBars: React.FC<{ label: string; value: number; colorClass: string }> = ({
   label,
@@ -205,7 +216,7 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
             <span className="text-xs text-sky-400 font-medium">Vista previa 3D en vivo</span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
             {FIGHTER_LIST.map((f) => {
               const selected = f.id === playerId;
               return (
@@ -213,17 +224,17 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
                   key={f.id}
                   type="button"
                   onClick={() => onPlayerChange(f.id)}
-                  className={`flex flex-col items-center gap-1.5 rounded-xl p-2.5 border text-center transition-all cursor-pointer ${
+                  className={`flex flex-col items-center gap-1 rounded-xl p-2 border text-center transition-all cursor-pointer ${
                     selected
                       ? 'bg-slate-800 border-amber-400 shadow-md'
                       : 'bg-slate-900/80 border-white/10 hover:border-white/30'
                   }`}
                 >
-                  <FighterEmblem id={f.id} className="w-9 h-9" />
-                  <span className="font-display font-bold text-sm text-white whitespace-nowrap">
+                  <FighterEmblem id={f.id} className="w-8 h-8" />
+                  <span className="font-display font-bold text-xs text-white whitespace-nowrap">
                     {f.name}
                   </span>
-                  <span className="text-[11px] text-slate-400 truncate max-w-full">
+                  <span className="text-[10px] text-slate-400 truncate max-w-full">
                     {f.archetype}
                   </span>
                 </button>

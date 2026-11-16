@@ -69,7 +69,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
 
           {/* Unboxed clean metadata summary */}
           <div className="mt-4 inline-flex items-center gap-2.5 text-xs sm:text-sm text-slate-200 bg-[#0B1324]/75 px-3.5 py-1.5 rounded-lg border border-white/10 tabular-nums">
-            <span>4 Luchadores</span>
+            <span>10 Luchadores</span>
             <span aria-hidden="true" className="text-slate-500">·</span>
             <span>Equipos y 1 vs 4</span>
             <span aria-hidden="true" className="text-slate-500">·</span>

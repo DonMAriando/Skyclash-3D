@@ -100,6 +100,62 @@ export const FighterEmblem: React.FC<{
       </svg>
     );
   }
+  if (id === 'voltik') {
+    return (
+      <svg viewBox="0 0 36 36" fill="none" className={className} aria-hidden="true">
+        <circle cx="18" cy="18" r="14" fill="#422006" stroke="#FACC15" strokeWidth="2" />
+        <path d="M20 7L12 19H18L15 29L25 16H19L20 7Z" fill="#FEF08A" />
+        <circle cx="11.5" cy="21" r="2.2" fill="#EF4444" />
+      </svg>
+    );
+  }
+  if (id === 'puffo') {
+    return (
+      <svg viewBox="0 0 36 36" fill="none" className={className} aria-hidden="true">
+        <circle cx="18" cy="18" r="14" fill="#831843" stroke="#F472B6" strokeWidth="2" />
+        <circle cx="18" cy="18" r="9.5" fill="#F9A8D4" />
+        <path d="M18 11L20 15.5L25 16L21.2 19.2L22.2 24L18 21.5L13.8 24L14.8 19.2L11 16L16 15.5L18 11Z" fill="#FEF08A" />
+      </svg>
+    );
+  }
+  if (id === 'selene') {
+    return (
+      <svg viewBox="0 0 36 36" fill="none" className={className} aria-hidden="true">
+        <polygon points="18,4 30,14 25,31 11,31 6,14" fill="#3B0764" stroke="#E879F9" strokeWidth="2" />
+        <polygon points="18,9 24,18 18,27 12,18" fill="#38BDF8" />
+        <polygon points="18,12 21,18 18,24 15,18" fill="#E0F2FE" />
+      </svg>
+    );
+  }
+  if (id === 'marco') {
+    return (
+      <svg viewBox="0 0 36 36" fill="none" className={className} aria-hidden="true">
+        <circle cx="18" cy="18" r="14" fill="#7F1D1D" stroke="#EF4444" strokeWidth="2" />
+        <path d="M9 17C9 11.5 13 8 18 8C23 8 27 11.5 27 17H9Z" fill="#DC2626" />
+        <rect x="8" y="16" width="20" height="3.5" rx="1.75" fill="#991B1B" />
+        <circle cx="18" cy="13" r="3.4" fill="#FFFFFF" />
+        <path d="M15.8 14.5V11.5L18 13.4L20.2 11.5V14.5" stroke="#DC2626" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (id === 'arion') {
+    return (
+      <svg viewBox="0 0 36 36" fill="none" className={className} aria-hidden="true">
+        <path d="M8 8H28V18C28 24.5 18 31 18 31C18 31 8 24.5 8 18V8Z" fill="#14532D" stroke="#4ADE80" strokeWidth="2" />
+        <path d="M18 11L23 19H13L18 11Z" fill="#FACC15" />
+        <path d="M18 27V14" stroke="#E2E8F0" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (id === 'vulpex') {
+    return (
+      <svg viewBox="0 0 36 36" fill="none" className={className} aria-hidden="true">
+        <polygon points="6,10 14,14 18,7 22,14 30,10 25,27 18,31 11,27" fill="#7C2D12" stroke="#22D3EE" strokeWidth="2" />
+        <polygon points="18,14 24,20 18,26 12,20" fill="#22D3EE" fillOpacity="0.85" />
+        <polygon points="18,16 21,20 18,24 15,20" fill="#ECFEFF" />
+      </svg>
+    );
+  }
   return (
     <svg viewBox="0 0 36 36" fill="none" className={className} aria-hidden="true">
       <circle cx="18" cy="18" r="14" fill="#064E3B" stroke="#34D399" strokeWidth="2" />

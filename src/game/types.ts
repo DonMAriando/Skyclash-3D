@@ -1,4 +1,14 @@
-export type FighterId = 'kael' | 'vespera' | 'titan' | 'lyra';
+export type FighterId =
+  | 'kael'
+  | 'vespera'
+  | 'titan'
+  | 'lyra'
+  | 'voltik'
+  | 'puffo'
+  | 'selene'
+  | 'marco'
+  | 'arion'
+  | 'vulpex';
 export type StageId = 'sky_temple' | 'pillar_sanctuary' | 'golden_summit';
 export type GameMode = 'tournament' | 'quick';
 export type MatchRuleMode = 'ffa' | 'teams';

@@ -200,6 +200,23 @@ export class SoundEngine {
     });
   }
 
+  public playReflect(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(980, now);
+    osc.frequency.exponentialRampToValueAtTime(1680, now + 0.11);
+    gain.gain.setValueAtTime(0.16, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.14);
+  }
+
   public playSpecial(fighterId: FighterId): void {
     const ctx = this.ensureContext();
     if (!ctx) return;
@@ -219,6 +236,30 @@ export class SoundEngine {
       osc.type = 'square';
       osc.frequency.setValueAtTime(140, now);
       osc.frequency.exponentialRampToValueAtTime(52, now + 0.24);
+    } else if (fighterId === 'voltik') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(760, now);
+      osc.frequency.exponentialRampToValueAtTime(1420, now + 0.14);
+    } else if (fighterId === 'puffo') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(340, now);
+      osc.frequency.exponentialRampToValueAtTime(860, now + 0.2);
+    } else if (fighterId === 'selene') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(720, now);
+      osc.frequency.exponentialRampToValueAtTime(1320, now + 0.22);
+    } else if (fighterId === 'marco') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(360, now);
+      osc.frequency.exponentialRampToValueAtTime(690, now + 0.13);
+    } else if (fighterId === 'arion') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(420, now);
+      osc.frequency.exponentialRampToValueAtTime(790, now + 0.18);
+    } else if (fighterId === 'vulpex') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(1120, now);
+      osc.frequency.exponentialRampToValueAtTime(380, now + 0.1);
     } else {
       osc.type = 'sine';
       osc.frequency.setValueAtTime(520, now);
