@@ -2270,10 +2270,11 @@ export class SmashGameEngine {
   private checkBlastZones(f: FighterRuntime): void {
     if (f.action === 'respawn' || f.eliminated || this.matchEnded) return;
     const bz = this.currentStage.blastZones;
-    const out =
-      f.x < bz.left || f.x > bz.right || f.y < bz.bottom || f.y > bz.top;
+    const outSideOrBottom = f.x < bz.left || f.x > bz.right || f.y < bz.bottom;
+    // Smash-style top blast zone: only KOs if launched upward in hitstun (jumping/recovering above top is safe)
+    const outTopLaunched = f.y > bz.top && f.action === 'hitstun';
 
-    if (!out) return;
+    if (!outSideOrBottom && !outTopLaunched) return;
 
     // Ring-out explosion!
     this.sound.playRingOut();
@@ -2735,15 +2736,20 @@ export class SmashGameEngine {
     }
     _projVec.set(f.x, f.y + 1.0, 0).project(this.camera);
     const out =
-      Math.abs(_projVec.x) > 0.96 || Math.abs(_projVec.y) > 0.92 || _projVec.z > 1;
+      Math.abs(_projVec.x) > 0.95 ||
+      _projVec.y > 0.86 ||
+      _projVec.y < -0.92 ||
+      _projVec.z > 1;
     if (!out) {
       return { visible: false, xPct: 50, yPct: 50, angleRad: 0 };
     }
-    const clampedX = THREE.MathUtils.clamp(_projVec.x, -0.9, 0.9);
-    const clampedY = THREE.MathUtils.clamp(_projVec.y, -0.82, 0.82);
+    const clampedX = THREE.MathUtils.clamp(_projVec.x, -0.92, 0.92);
+    const clampedY = THREE.MathUtils.clamp(_projVec.y, -0.80, 0.78);
     const xPct = (clampedX * 0.5 + 0.5) * 100;
     const yPct = (-clampedY * 0.5 + 0.5) * 100;
-    const angleRad = Math.atan2(-_projVec.y, _projVec.x);
+    const dx = _projVec.x - clampedX;
+    const dy = -(_projVec.y - clampedY);
+    const angleRad = dx !== 0 || dy !== 0 ? Math.atan2(dy, dx) : Math.atan2(-_projVec.y, _projVec.x);
     return { visible: true, xPct, yPct, angleRad };
   }
 

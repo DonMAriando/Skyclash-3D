@@ -119,6 +119,7 @@ export const CombatHud: React.FC<CombatHudProps> = ({
       {hud.fighters.map((f) => {
         if (!f.offscreen.visible || f.eliminated) return null;
         const tm = TEAM_META[f.team];
+        const deg = (f.offscreen.angleRad * 180) / Math.PI;
         return (
           <div
             key={`off-${f.slotIndex}`}
@@ -127,10 +128,23 @@ export const CombatHud: React.FC<CombatHudProps> = ({
               top: `${f.offscreen.yPct}%`,
               transform: 'translate(-50%, -50%)',
             }}
-            className={`absolute flex items-center gap-1.5 rounded-full px-2.5 py-1 border bg-[#0B1324]/92 shadow-lg ${tm.borderClass} ${tm.textClass}`}
+            className="absolute z-20 flex items-center justify-center"
           >
-            <FighterEmblem id={f.id} className="w-5 h-5" />
-            <span className="font-display font-bold text-xs tabular-nums">{f.damage}%</span>
+            {/* Directional pointer rotating toward the fighter's exact off-screen position */}
+            <div
+              style={{ transform: `rotate(${deg}deg)` }}
+              className="absolute inset-0 flex items-center justify-end pointer-events-none"
+            >
+              <span
+                className={`block w-2.5 h-2.5 -mr-2.5 rotate-45 border-t-2 border-r-2 ${tm.borderClass} bg-[#0B1324]`}
+              />
+            </div>
+            <div
+              className={`relative flex items-center gap-1.5 rounded-full px-2.5 py-1.5 border-2 bg-[#0B1324]/95 shadow-xl ${tm.borderClass} ${tm.textClass}`}
+            >
+              <FighterEmblem id={f.id} className="w-5 h-5" />
+              <span className="font-display font-bold text-xs tabular-nums">{f.damage}%</span>
+            </div>
           </div>
         );
       })}
