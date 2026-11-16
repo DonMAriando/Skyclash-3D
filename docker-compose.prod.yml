@@ -1,0 +1,21 @@
+name: skyclash
+
+services:
+  web:
+    image: ghcr.io/donmariando/skyclash-3d:prod-latest
+    pull_policy: always
+    expose:
+      - "3003"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3003/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true
