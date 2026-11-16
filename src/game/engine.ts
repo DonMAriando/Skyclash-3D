@@ -85,6 +85,8 @@ interface Projectile {
   active: boolean;
   ownerIsPlayer: boolean;
   fighterId: FighterId;
+  behavior: 'solar_bomb' | 'wind_homing' | 'shockwave';
+  launchDir: 'side' | 'up';
   x: number;
   y: number;
   vx: number;
@@ -452,7 +454,7 @@ export class SmashGameEngine {
       groundedPlatformId: null,
       coyoteTimer: 0,
       dropThroughTimer: 0,
-      jumpsLeft: 2,
+      jumpsLeft: profileId === 'vespera' ? 2 : 1,
       upSpecialUsed: false,
       damage: 0,
       stocks: MAX_STOCKS,
@@ -1138,7 +1140,8 @@ export class SmashGameEngine {
       }
     }
 
-    // Jump & Double Jump (with Coyote Time + Jump Buffer)
+    // Jump, Double Jump & Vespera Triple Jump (with Coyote Time + Jump Buffer)
+    const maxAirJumps = f.profileId === 'vespera' ? 2 : 1;
     if (inp.jumpBuffer > 0) {
       if (f.grounded || f.coyoteTimer > 0) {
         inp.jumpBuffer = 0;
@@ -1146,7 +1149,7 @@ export class SmashGameEngine {
         f.groundedPlatformId = null;
         f.coyoteTimer = 0;
         f.vy = profile.jumpForce;
-        f.jumpsLeft = 1;
+        f.jumpsLeft = maxAirJumps;
         f.squashX = 0.78;
         f.squashY = 1.26;
         this.sound.playJump(false);
@@ -1158,7 +1161,15 @@ export class SmashGameEngine {
         f.squashX = 0.8;
         f.squashY = 1.24;
         this.sound.playJump(true);
-        this.spawnParticles(f.x, f.y + 0.15, 0, 0x38bdf8, 8, 4.5, 0.5);
+        this.spawnParticles(
+          f.x,
+          f.y + 0.15,
+          0,
+          f.profileId === 'vespera' ? 0x22d3ee : 0x38bdf8,
+          8,
+          4.5,
+          0.5,
+        );
       }
     }
 
@@ -1202,9 +1213,14 @@ export class SmashGameEngine {
       return;
     }
 
-    // Fast fall
+    // Fast fall & Lyra Celestial Glide
     if (!f.grounded && inp.down && f.vy < 2) {
       f.vy = Math.min(f.vy, -profile.fallSpeedMax * 0.95);
+    } else if (f.profileId === 'lyra' && !f.grounded && inp.up && f.vy < -1.5) {
+      f.vy = Math.max(f.vy, -4.4);
+      if (Math.random() < 0.25) {
+        this.spawnParticles(f.x, f.y + 0.2, 0, 0x34d399, 1, 1.5, 0.32);
+      }
     }
 
     this.applyGravityAndPlatforms(f, profile, dt);
@@ -1217,55 +1233,141 @@ export class SmashGameEngine {
     }
   }
 
+  private spawnProjectile(
+    ownerIsPlayer: boolean,
+    fighterId: FighterId,
+    behavior: Projectile['behavior'],
+    launchDir: Projectile['launchDir'],
+    x: number,
+    y: number,
+    vx: number,
+    vy: number,
+    radius: number,
+    damage: number,
+    knockback: number,
+    life: number,
+    mesh: THREE.Mesh,
+  ): void {
+    mesh.position.set(x, y, 0);
+    this.scene.add(mesh);
+    this.projectiles.push({
+      active: true,
+      ownerIsPlayer,
+      fighterId,
+      behavior,
+      launchDir,
+      x,
+      y,
+      vx,
+      vy,
+      radius,
+      damage,
+      knockback,
+      life,
+      mesh,
+    });
+  }
+
   private startNeutralSpecial(f: FighterRuntime, _profile: FighterProfile): void {
     f.action = 'special';
-    f.actionDuration = 0.34;
-    f.actionTimer = 0.34;
+    f.actionDuration = f.profileId === 'vespera' ? 0.28 : 0.34;
+    f.actionTimer = f.actionDuration;
     f.attackHitConfirmed = false;
     f.attackDir = 'neutral';
     this.sound.playSpecial(f.profileId);
 
-    if (f.profileId === 'kael' || f.profileId === 'lyra') {
-      // Spawn energy projectile
-      const isKael = f.profileId === 'kael';
-      const geo = isKael
-        ? new THREE.SphereGeometry(0.32, 12, 10)
-        : new THREE.TorusGeometry(0.34, 0.11, 8, 16);
-      const mat = new THREE.MeshStandardMaterial({
-        color: isKael ? 0xfb923c : 0x34d399,
-        emissive: isKael ? 0xf97316 : 0x10b981,
-        emissiveIntensity: 2.0,
-        roughness: 0.2,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(f.x + f.facing * 0.95, f.y + 1.05, 0);
-      this.scene.add(mesh);
-      this.projectiles.push({
-        active: true,
-        ownerIsPlayer: f.isPlayer,
-        fighterId: f.profileId,
-        x: f.x + f.facing * 0.95,
-        y: f.y + 1.05,
-        vx: f.facing * (isKael ? 15.5 : 17.5),
-        vy: 0,
-        radius: 0.55,
-        damage: isKael ? 10 : 8,
-        knockback: isKael ? 9.5 : 10.5,
-        life: 1.35,
+    if (f.profileId === 'kael') {
+      // Orbe Solar Explosivo: detonates in AoE on hit or max range
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.36, 12, 10),
+        new THREE.MeshStandardMaterial({
+          color: 0xfb923c,
+          emissive: 0xf97316,
+          emissiveIntensity: 2.1,
+          roughness: 0.2,
+        }),
+      );
+      this.spawnProjectile(
+        f.isPlayer,
+        'kael',
+        'solar_bomb',
+        'side',
+        f.x + f.facing * 0.95,
+        f.y + 1.05,
+        f.facing * 14.2,
+        0,
+        0.58,
+        11,
+        10.5,
+        0.95,
         mesh,
-      });
-      this.spawnParticles(f.x + f.facing * 0.9, f.y + 1.05, 0, isKael ? 0xf97316 : 0x34d399, 8, 5, 0.55);
+      );
+      this.spawnParticles(f.x + f.facing * 0.9, f.y + 1.05, 0, 0xf97316, 10, 5.5, 0.58);
+    } else if (f.profileId === 'lyra') {
+      // Céfiro Arcano: vertical-homing wind vortex that launches upward
+      const mesh = new THREE.Mesh(
+        new THREE.TorusGeometry(0.38, 0.12, 8, 18),
+        new THREE.MeshStandardMaterial({
+          color: 0x6ee7b7,
+          emissive: 0x10b981,
+          emissiveIntensity: 2.0,
+          roughness: 0.2,
+        }),
+      );
+      this.spawnProjectile(
+        f.isPlayer,
+        'lyra',
+        'wind_homing',
+        'up',
+        f.x + f.facing * 0.95,
+        f.y + 1.05,
+        f.facing * 15.0,
+        0,
+        0.6,
+        9,
+        11.2,
+        1.45,
+        mesh,
+      );
+      this.spawnParticles(f.x + f.facing * 0.9, f.y + 1.05, 0, 0x34d399, 10, 5, 0.55);
     } else if (f.profileId === 'vespera') {
-      // Shadow Blink Dash!
-      f.vx = f.facing * 20;
-      f.vy = Math.max(0, f.vy * 0.2);
-      this.spawnParticles(f.x, f.y + 1.0, 0, 0x22d3ee, 12, 7, 0.65);
+      // Destello Umbral: phase-blink dash with brief invulnerability that cuts through foes
+      f.invulnTimer = Math.max(f.invulnTimer, 0.22);
+      f.vx = f.facing * 23;
+      f.vy = Math.max(0, f.vy * 0.15);
+      this.spawnParticles(f.x, f.y + 1.0, 0, 0x22d3ee, 14, 7.5, 0.65);
     } else {
-      // Titan-G Seismic Slam!
-      f.vy = f.grounded ? 4.5 : -14;
+      // Titán-G Onda Sísmica: slams down and fires dual golden shockwaves left & right!
+      f.vy = f.grounded ? 1.5 : -17;
       f.vx = 0;
-      this.cameraTrauma = Math.min(1, this.cameraTrauma + 0.35);
-      this.spawnParticles(f.x, f.y + 0.2, 0, 0xf59e0b, 16, 8.5, 0.7);
+      this.cameraTrauma = Math.min(1, this.cameraTrauma + 0.42);
+      this.spawnParticles(f.x, f.y + 0.2, 0, 0xf59e0b, 18, 9, 0.72);
+      [-1, 1].forEach((dir) => {
+        const waveMesh = new THREE.Mesh(
+          new THREE.ConeGeometry(0.36, 0.85, 6),
+          new THREE.MeshStandardMaterial({
+            color: 0xfbbf24,
+            emissive: 0xf59e0b,
+            emissiveIntensity: 1.9,
+            roughness: 0.25,
+          }),
+        );
+        this.spawnProjectile(
+          f.isPlayer,
+          'titan',
+          'shockwave',
+          'up',
+          f.x + dir * 0.85,
+          f.y + 0.42,
+          dir * 12.5,
+          0,
+          0.62,
+          12,
+          11.8,
+          0.7,
+          waveMesh,
+        );
+      });
     }
   }
 
@@ -1278,18 +1380,37 @@ export class SmashGameEngine {
     f.grounded = false;
     f.groundedPlatformId = null;
     f.upSpecialUsed = true;
-    f.vy = profile.upSpecialBoost;
-    if (moveDir !== 0) {
-      f.facing = moveDir > 0 ? 1 : -1;
-      f.vx = moveDir * 7.5;
+
+    if (f.profileId === 'vespera') {
+      // Teletransporte Cian: instant upward dimensional blink + whirl
+      this.spawnParticles(f.x, f.y + 0.9, 0, 0x22d3ee, 14, 7, 0.65);
+      f.y += 2.6;
+      f.x += (moveDir !== 0 ? moveDir : f.facing) * 1.4;
+      f.invulnTimer = Math.max(f.invulnTimer, 0.18);
+      f.vy = profile.upSpecialBoost;
+      f.vx = (moveDir !== 0 ? moveDir : f.facing) * 5.2;
+    } else if (f.profileId === 'kael') {
+      // Ascenso Ígneo: blazing diagonal uppercut
+      f.vy = profile.upSpecialBoost;
+      if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
+      f.vx = (moveDir !== 0 ? moveDir : f.facing) * 9.2;
+    } else if (f.profileId === 'lyra') {
+      // Corriente Celestial: tall smooth wind updraft
+      f.vy = profile.upSpecialBoost;
+      if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
+      f.vx = moveDir * 7.8;
     } else {
-      f.vx = f.facing * 3.5;
+      // Titán-G Propulsión Áurea: armored rocket hammer ascent
+      f.vy = profile.upSpecialBoost;
+      if (moveDir !== 0) f.facing = moveDir > 0 ? 1 : -1;
+      f.vx = moveDir * 5.5;
     }
+
     f.squashX = 0.72;
     f.squashY = 1.34;
     this.sound.playSpecial(f.profileId);
     const col = new THREE.Color(profile.emissiveColor).getHex();
-    this.spawnParticles(f.x, f.y + 0.5, 0, col, 14, 7.5, 0.65);
+    this.spawnParticles(f.x, f.y + 0.5, 0, col, 16, 8.0, 0.7);
   }
 
   private applyGravityAndPlatforms(
@@ -1346,7 +1467,7 @@ export class SmashGameEngine {
       f.grounded = true;
       f.groundedPlatformId = landedPlat.id;
       f.coyoteTimer = 0.1;
-      f.jumpsLeft = 2;
+      f.jumpsLeft = f.profileId === 'vespera' ? 2 : 1;
       f.upSpecialUsed = false;
     } else {
       if (f.grounded) {
@@ -1389,7 +1510,14 @@ export class SmashGameEngine {
     const defCenterY = defender.y + 1.0;
     const dx = defCenterX - hx;
     const dy = defCenterY - hy;
-    const hitRadius = isSmash ? 1.35 : 1.15;
+    const hitRadius =
+      attacker.profileId === 'titan' && isSpecial
+        ? 1.55
+        : attacker.profileId === 'kael' && isSmash
+          ? 1.48
+          : isSmash
+            ? 1.35
+            : 1.15;
 
     if (dx * dx + dy * dy <= hitRadius * hitRadius) {
       attacker.attackHitConfirmed = true;
@@ -1449,6 +1577,21 @@ export class SmashGameEngine {
       this.stats.playerMaxDamage = Math.max(this.stats.playerMaxDamage, defender.damage);
     }
 
+    // Titán-G Super Armor: resists hitstun & knockback from light attacks while charging Smash or using Specials
+    const hasSuperArmor =
+      defender.profileId === 'titan' &&
+      !isHeavy &&
+      (defender.action === 'smash_charge' ||
+        defender.action === 'special' ||
+        defender.action === 'up_special');
+
+    if (hasSuperArmor) {
+      defender.hitFlashTimer = 0.1;
+      this.sound.playShieldClang();
+      this.spawnParticles(defender.x, defender.y + 1.1, 0.25, 0xf59e0b, 10, 6.5, 0.6);
+      return;
+    }
+
     // Smash knockback formula scaled by % and weight
     const kb = (baseKnockback + defender.damage * 0.165) * (100 / defProfile.weight);
     const launchDirX = attacker
@@ -1498,19 +1641,30 @@ export class SmashGameEngine {
   private stepProjectiles(p1: FighterRuntime, p2: FighterRuntime, dt: number): void {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const proj = this.projectiles[i];
+      const target = proj.ownerIsPlayer ? p2 : p1;
+      const attacker = proj.ownerIsPlayer ? p1 : p2;
+
       proj.life -= dt;
+
+      // Fighter-specific projectile flight behavior
+      if (proj.behavior === 'wind_homing') {
+        const desiredVy = THREE.MathUtils.clamp((target.y + 1.0 - proj.y) * 3.2, -5.5, 5.5);
+        proj.vy = THREE.MathUtils.lerp(proj.vy, desiredVy, 1 - Math.exp(-4.5 * dt));
+      }
+
       proj.x += proj.vx * dt;
       proj.y += proj.vy * dt;
       proj.mesh.position.set(proj.x, proj.y, 0);
-      proj.mesh.rotation.z += dt * 10;
-      proj.mesh.rotation.y += dt * 6;
 
-      const target = proj.ownerIsPlayer ? p2 : p1;
-      const attacker = proj.ownerIsPlayer ? p1 : p2;
-      let remove = proj.life <= 0;
+      if (proj.behavior === 'shockwave') {
+        proj.mesh.rotation.y += dt * 12;
+      } else {
+        proj.mesh.rotation.z += dt * 10;
+        proj.mesh.rotation.y += dt * 6;
+      }
 
+      let hitDirect = false;
       if (
-        !remove &&
         target.invulnTimer <= 0 &&
         target.action !== 'respawn' &&
         target.action !== 'dodge'
@@ -1518,6 +1672,7 @@ export class SmashGameEngine {
         const dx = target.x - proj.x;
         const dy = target.y + 1.0 - proj.y;
         if (dx * dx + dy * dy <= (proj.radius + 0.7) ** 2) {
+          hitDirect = true;
           this.applyHit(
             {
               ...attacker,
@@ -1527,14 +1682,33 @@ export class SmashGameEngine {
             target,
             proj.damage,
             proj.knockback,
-            'side',
-            false,
+            proj.launchDir,
+            proj.behavior === 'solar_bomb' || proj.behavior === 'shockwave',
           );
-          remove = true;
         }
       }
 
-      if (remove) {
+      const expired = proj.life <= 0;
+      if (hitDirect || expired) {
+        // Kael's Solar Bomb explodes in an AoE fireball when impacting or expiring!
+        if (proj.behavior === 'solar_bomb') {
+          this.spawnParticles(proj.x, proj.y, 0.2, 0xf97316, 20, 10.5, 0.9);
+          this.cameraTrauma = Math.min(1, this.cameraTrauma + 0.2);
+          if (!hitDirect && target.invulnTimer <= 0 && target.action !== 'respawn' && target.action !== 'dodge') {
+            const bx = target.x - proj.x;
+            const by = target.y + 1.0 - proj.y;
+            if (bx * bx + by * by <= 2.35 * 2.35) {
+              this.applyHit(
+                { ...attacker, facing: proj.vx >= 0 ? 1 : -1, x: proj.x } as FighterRuntime,
+                target,
+                proj.damage,
+                proj.knockback,
+                'up',
+                true,
+              );
+            }
+          }
+        }
         this.scene.remove(proj.mesh);
         proj.mesh.geometry.dispose();
         (proj.mesh.material as THREE.Material).dispose();
@@ -1600,7 +1774,7 @@ export class SmashGameEngine {
     f.vy = 0;
     f.x = opp.x > 0 ? -2.2 : 2.2;
     f.y = 8.5;
-    f.jumpsLeft = 2;
+    f.jumpsLeft = f.profileId === 'vespera' ? 2 : 1;
     f.upSpecialUsed = false;
     f.invulnTimer = 2.2;
     f.shield = 100;

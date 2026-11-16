@@ -164,13 +164,19 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
             <StatBars label="Peso" value={activeFighter.weightRating} colorClass="bg-emerald-400" />
           </div>
 
-          <div className="pt-1 border-t border-white/10 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-300">
-            <span>
-              <strong className="text-amber-300">Especial (U):</strong> {activeFighter.specialName}
-            </span>
-            <span>
-              <strong className="text-sky-300">Recuperar (W+U):</strong> {activeFighter.upSpecialName}
-            </span>
+          <div className="pt-2 border-t border-white/10 space-y-1.5 text-xs text-slate-300">
+            <div>
+              <strong className="text-amber-300">Especial (U): {activeFighter.specialName}</strong>
+              <span className="text-slate-400"> — {activeFighter.specialDesc}</span>
+            </div>
+            <div>
+              <strong className="text-sky-300">Recuperar (W+U): {activeFighter.upSpecialName}</strong>
+              <span className="text-slate-400"> — {activeFighter.upSpecialDesc}</span>
+            </div>
+            <div>
+              <strong className="text-emerald-300">Rasgo Único: {activeFighter.passiveName}</strong>
+              <span className="text-slate-400"> — {activeFighter.passiveDesc}</span>
+            </div>
           </div>
         </div>
 

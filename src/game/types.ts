@@ -47,7 +47,10 @@ export interface FighterProfile {
   specialName: string;
   specialDesc: string;
   upSpecialName: string;
+  upSpecialDesc: string;
   upSpecialBoost: number;
+  passiveName: string;
+  passiveDesc: string;
   // UI display ratings (1-5)
   speedRating: number;
   powerRating: number;
