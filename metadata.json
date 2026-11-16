@@ -1,0 +1,6 @@
+{
+  "name": "SKYCLASH 3D",
+  "description": "Juego de lucha en plataformas 3D estilo arcade con 4 luchadores únicos, 3 arenas flotantes e IA progresiva.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
